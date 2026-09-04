@@ -58,19 +58,51 @@ directory entering history.
 
 ## Installing the Waters SDK
 
-An installer, `tools/install_sdk.py`, will unpack your Waters download into the gitignored
-`external/masslynxsdk/` directory, install the `masslynxsdk` wheel into the project environment,
-place `MassLynxRaw.dll` where the wheel loads it, and record where your `license.key` lives. Until
-it exists, do not copy any part of the SDK into this repository; `.gitignore` excludes the wheel,
-the DLL, and every `*.key` file by name as a second line of defense.
+To read `.raw` acquisitions, first obtain the MassLynx SDK from Waters. Waters distributes it as a
+single zip, document number 667007504, containing the `masslynxsdk` wheel, the native
+`MassLynxRaw.dll`, the C++ headers, the API help, and the `license.key` issued to you. Then point
+the installer at that zip:
+
+```
+uv run tools/install_sdk.py path/to/667007504DDRevA.zip
+```
+
+The installer verifies the download against the MD5 list Waters ships inside it, unpacks it into
+`external/masslynxsdk/`, puts the package on the environment's import path, and loads the native
+library to confirm it works. It reports where the key landed. Run it again at any time to repair
+or upgrade an install, and run it with `--relink` to attach an SDK that is already unpacked to a
+second environment.
+
+Nothing needs to be configured after that. schamp reads the key from
+`external/masslynxsdk/license.key`, which is where the installer puts it. To use a key held
+elsewhere, set `SCHAMP_LICENSE_PATH`, or write a `schamp.ini` in the working directory:
+
+```ini
+[license]
+path = C:\path\to\license.key
+```
+
+The full precedence, first hit winning, is the `license_key` and `license_path` arguments, then
+`SCHAMP_LICENSE_KEY` and `SCHAMP_LICENSE_PATH`, then the `[license]` section of `schamp.ini`, then
+`./license.key`, then the installed copy. Verify an install with `uv run tools/check_public.py`,
+which reports the SDK, the key, and, when `SCHAMP_SMOKE_RAW` names an acquisition, a real read
+from it.
+
+The SDK is licensed to you by Waters, not by this project, and its EULA does not permit
+redistribution. Everything the installer writes goes into `external/`, which is gitignored;
+`.gitignore` additionally excludes the wheel, the DLL, and every `*.key` file by name. Every lab
+installs from its own download. Note that a `uv sync` following a Python version change rebuilds
+`.venv/` and drops the import path entry. Rerun the installer with `--relink` to restore it.
 
 ## Layout
 
 ```
-src/schamp/      the package (stub at this commit)
-tools/           bootstrap.py (fetches external/) and check_public.py (the self-check)
+src/schamp/      the package; sdk.py opens licensed SDK readers on a .raw, the rest is a stub
+tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
+                 check_public.py (the self-check)
 docs/            the 2016 Analyst paper and its supporting information, with an index
-external/        reference code fetched by bootstrap.py, read in place, never imported or vendored
+external/        the Waters SDK installed by install_sdk.py, and reference code fetched by
+                 bootstrap.py and read in place, never imported or vendored
                  (not in this repository)
 ```
 
