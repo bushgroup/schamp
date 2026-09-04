@@ -1,5 +1,11 @@
-# The working tree is LF throughout (written by Python/agent tooling, read by
-# gfortran under MSYS2 and by PowerShell, both of which are LF-tolerant).
-# Pin that so a Windows checkout does not rewrite every file to CRLF and
-# produce a whole-tree spurious diff.
+# The working tree is LF throughout (written by Python and agent tooling, read by
+# Python and PowerShell, both of which are LF-tolerant). Pin that so a Windows
+# checkout does not rewrite every file to CRLF and produce a whole-tree spurious
+# diff.
 * text=auto eol=lf
+
+# Verbatim vendor output, kept byte for byte. `_extern.inf` is written by MassLynx
+# with CRLF line endings and Latin-1 bytes for the degree sign; the point of the
+# fixture is that the parser copes with what the instrument actually writes, so
+# normalising it would quietly remove what it tests.
+tests/fixtures/_extern.inf -text

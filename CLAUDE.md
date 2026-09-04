@@ -18,7 +18,13 @@ you are reading this file *without* that import, you have a public clone — the
   the `python` on PATH.
 - **`uv run tools/check_public.py`** after touching `src/schamp/` or `examples/`. Data-free and
   SDK-free: a clone with no Waters SDK, no license and no `.raw` must pass it. Checks that need the
-  SDK report SKIPPED, never FAIL, when it is absent.
+  SDK report SKIPPED, never FAIL, when it is absent. Set `SCHAMP_SMOKE_RAW` to an acquisition to
+  add the reads that need one.
+- **The module layout is settled** (lab record, task 03): only `extract` and `sdk` may touch the
+  SDK, `atd.ATD` is the seam, and everything else must keep running without one. Hardware
+  constants belong in an instrument profile TOML and per-acquisition conditions in a conditions
+  table — never in analysis code. New physics goes beside the closed forms in `constants.py`,
+  which derives its numbers and types none.
 - **The Waters MassLynx SDK is never committed** — not the wheel, not `MassLynxRaw.dll`, not
   `license.key`, not the zip, not the help files. Its EULA does not permit redistribution. Users
   install it from their own Waters download into gitignored `external/masslynxsdk/`

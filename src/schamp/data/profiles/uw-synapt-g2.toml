@@ -1,0 +1,105 @@
+# The University of Washington Synapt G2 HDMS with an RF-confining drift cell.
+#
+# This is the instrument of Allen, Giles, Gilbert & Bush, Analyst 2016, 141, 884
+# (docs/2016-allen-rf-confining-drift-cell.pdf, CC-BY), and the reference example of
+# the profile format. To add your own instrument, copy this file, edit it, and load it
+# by path: schamp.load_profile("my-lab-g2s.toml"). Nothing in the analysis code knows
+# these numbers; they all arrive from here.
+#
+# Every value is either a measured property of the hardware or a key name written by
+# MassLynx. Where two sources of the geometry disagree, both are recorded and the one
+# the analysis uses is named, rather than one being quietly picked.
+
+schema = 1
+name = "uw-synapt-g2"
+title = "UW Synapt G2 HDMS, RF-confining drift cell"
+instrument = "Waters Synapt G2 HDMS"
+reference = "Allen, Giles, Gilbert & Bush, Analyst 2016, 141, 884"
+
+[cell]
+# The electrical drift region: the span between the two plates that the resistor chain
+# taps one resistor in from each end. This is the L of eqns (2) and (3), and the only
+# length the physics uses.
+drift_length_cm = 25.05
+# drift_length_cm_err = 0.0     # optional; unset means the length is taken as exact
+
+# The mechanical length, inside face to inside face of the DC aperture lenses. Recorded
+# because Waters quotes both, and because it is what a drawing of the cell will show.
+# It is NOT the drift length and must never be substituted for it.
+mechanical_length_cm = 25.2
+
+# 168 gold-coated ring electrodes, 0.5 mm thick, 1.5 mm centre to centre, 7 mm bore.
+electrode_count = 168
+electrode_pitch_mm = 1.5
+electrode_bore_mm = 7.0
+
+# The resistor ladder that sets the field, as two independent counts. 170 equal steps:
+# a single 5 MOhm at each end, and between them two interleaved chains of 10 MOhm
+# tapping alternate plates, which in parallel give 5 MOhm per step. Two of those steps
+# lie outside the drift region -- one above the first plate, one below the exit plate --
+# so the drift voltage is (1 - 2/170) of the applied drop.
+#
+# Do not derive these from the geometry above or vice versa. 167 steps at a 1.5 mm
+# pitch make 25.05 cm and 168 make 25.2, so the counts and the lengths Waters quotes
+# are not exactly mutually consistent; each is carried as measured, and a G2-S or G2-Si
+# may differ in either.
+resistor_steps = 170
+untapped_steps = 2
+
+[drift_voltage]
+# V_drift = (VappH - VappL) * (1 - untapped_steps / resistor_steps)
+#
+# VappH is the sum of `high_keys`, VappL the sum of `low_keys`, both read from the
+# acquisition's own _extern.inf. Signs come from the recorded values and are not
+# applied here: `Helium Exit` reads -40.0 on this instrument, so listing it under
+# high_keys subtracts 40 V, which is correct.
+#
+# This is what ESI Fig. S2B of the paper prints and what Waters' own guide to the
+# device gives; the two agree exactly.
+high_keys = ["Helium Cell DC", "IMSBias", "Helium Exit"]
+low_keys = ["Transfer DC Entrance"]
+
+# Optics that look as though they should enter the drift voltage and do not, listed so
+# that the omissions are deliberate and legible rather than silent:
+#   IMS DC Entrance   the (removed) helium-cell exit plate, set to half of Helium Exit
+#                     to give a uniform drop into the drift region.
+#   Static Offset     the transfer cell referenced to ground; every other voltage is
+#                     relative to it, so it cancels.
+#   IMS DC Exit       not connected on this cell, and reads 0.0.
+excluded_keys = ["IMS DC Entrance", "Static Offset", "IMS DC Exit"]
+
+[gas]
+# The default drift gas. A conditions table may override it per acquisition, and must,
+# for anything other than the gas the instrument normally runs.
+default = "helium"
+
+[keys]
+# _extern.inf key names, given explicitly because they differ between instruments --
+# which is why nothing here promotes a key by guessing at its name.
+
+# The drift-bin width, in microseconds. MassLynx writes no such key on this instrument:
+# `Pusher` is the pusher pulse voltage in volts and `Pusher Offset` is a voltage too.
+# Left empty on purpose, so that the drift-time axis comes from the SDK's own
+# GetDriftTime rather than from a key that has never existed. Set it only if your
+# MassLynx really does write one, and check the value against the SDK's axis before
+# trusting it.
+pusher_interval = ""
+
+# Read for the acquisition-sanity checks below, and for the record.
+wave_height = "IMS Wave Height (V)"
+wave_velocity = "IMS Wave Velocity (m/s)"
+gas_flow = "IMS Gas Flow (mL/min)"
+helium_cell_gas_flow = "HeliumCellGasFlow"
+polarity = "Polarity"
+pushes_per_bin = "ADC Pushes Per IMS Increment"
+
+[checks]
+# A linear-field measurement needs the traveling wave off. On this instrument that
+# leaves no other trace in the data: the wave velocity keeps its last value and only
+# the height goes to zero. An acquisition whose `keys.wave_height` is not zero was
+# taken with the wave on and is not a drift-cell measurement at all.
+require_wave_off = true
+
+# One pusher per drift bin. If MassLynx were configured to sum several pushes into one
+# bin, the drift-bin width would no longer be the pusher period.
+expect_pushes_per_bin = 1

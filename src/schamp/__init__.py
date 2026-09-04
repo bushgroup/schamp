@@ -5,9 +5,25 @@ Waters Synapt G2 / G2-S / G2-Si instruments fitted with an RF-confining drift
 cell, and for converting them to mobilities and collision cross sections through
 the Mason-Schamp equation (Allen, Giles, Gilbert & Bush, Analyst 2016, 141, 884).
 
-This is the initial stub. The package layout is decided and implemented by the
-architecture task (lab record, task 03); until then the only public surface is
-`lab_dir()`, `DOCS_DIR` and the version.
+The pipeline is four layers with deliberate seams, and only the first needs the
+Waters SDK:
+
+    extract    a .raw plus m/z windows -> arrival-time distributions   [SDK]
+    atd        one distribution -> a centroid, a width, a fit quality
+    mobility   centroids against drift voltage -> K, K0, CCS
+    report     results.json, tables, figures
+
+Around them sit the things that describe the measurement rather than perform it:
+`profiles` (the cell geometry and the drift-voltage definition, per instrument),
+`experiment` (which acquisitions, at what pressure and temperature), `extern` (the
+one read the SDK does not offer), `constants` (CODATA and the closed forms), and
+`sdk` (finding the license key and opening the readers).
+
+Everything but `extract` and `sdk` runs on a machine with no SDK, no license and no
+acquisition, which is what `tools/check_public.py` exercises.
+
+The modules are the API. Only the three entry points a session reaches for first are
+re-exported here.
 """
 
 from __future__ import annotations
@@ -20,6 +36,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
 DOCS_DIR = os.path.join(ROOT, "docs")
 EXTERNAL_DIR = os.path.join(ROOT, "external")
+DATA_DIR = os.path.join(_HERE, "data")
+"""Files that ship inside the package: the instrument profiles, and nothing large."""
 
 # The lab repo's directories a session may need, by name. Nothing in src/ hard
 # codes a lab-side path; everything goes through lab_dir().
@@ -52,3 +70,19 @@ def lab_dir(name: str | None = None) -> str | None:
         path = os.path.join(root, name)
         return path if os.path.isdir(path) else None
     return None
+
+
+# Imported last: these modules read DATA_DIR from this one.
+from .experiment import load_experiment  # noqa: E402
+from .profiles import load_profile  # noqa: E402
+
+__all__ = [
+    "DATA_DIR",
+    "DOCS_DIR",
+    "EXTERNAL_DIR",
+    "ROOT",
+    "__version__",
+    "lab_dir",
+    "load_experiment",
+    "load_profile",
+]
