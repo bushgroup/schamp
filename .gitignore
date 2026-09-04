@@ -1,0 +1,24 @@
+external/
+.venv/
+__pycache__/
+*.pyc
+.claude/
+CLAUDE.local.md
+# The Waters MassLynx SDK is licensed to the user, not to this project, and its
+# EULA does not permit redistribution. external/ above is where install_sdk.py
+# puts it; these name-level exclusions catch a copy dropped anywhere else.
+license.key
+*.key
+MassLynxRaw.dll
+MassLynxRaw.lib
+*.so
+masslynxsdk-*.whl
+MassLynxSDK*.zip
+667007504DDRevA*.zip
+# Runtime config that carries a license path.
+schamp.ini
+# A Waters .raw acquisition is a directory of binary files, hundreds of MB.
+# Never in this repo; the lab repo holds them under its own ignore policy.
+*.raw/
+# Generated example output.
+examples/out/
