@@ -362,6 +362,87 @@ check_raises(
 )
 
 # --------------------------------------------------------------------------------
+section("m/z windows and the legacy peaks format")
+# Everything here is window bookkeeping, so it runs with no SDK and no acquisition.
+window = schamp.extract.MzWindow.around(789.4062, 0.3, "n=22, 2-", charge=-2, ion_mass_da=1580.8)
+check_close("a window centres on the m/z it was built around", window.centre, 789.4062, rel=1e-12)
+check_close("a window keeps the width it was given", window.width, 0.3, rel=1e-12)
+check_true("a window carries the charge the mobility layer needs", window.charge == -2)
+check_raises(
+    "a window far narrower than any m/z step is refused",
+    ValueError,
+    lambda: schamp.extract.MzWindow.around(1335.2941, 1e-6),
+)
+check_close(
+    "a 0.2 Th window, as the 2013 cation peaks file used, is accepted",
+    schamp.extract.MzWindow.around(232.1292, 0.2).width,
+    0.2,
+    rel=1e-12,
+)
+grid = schamp.extract.contiguous_windows(200.0, 1700.0, 255, label="panel A")
+check_true("a contiguous grid has the window count asked for", len(grid) == 255)
+check_true(
+    "a contiguous grid tiles the span with touching bounds",
+    grid[0].low == 200.0
+    and grid[-1].high == 1700.0
+    and all(grid[i].high == grid[i + 1].low for i in range(254)),
+)
+check_close("the 2013 heat-map grid is 5.882 Th per window", grid[0].width, 1500.0 / 255.0, rel=1e-12)
+check_raises(
+    "a grid with no windows is refused",
+    ValueError,
+    lambda: schamp.extract.contiguous_windows(200.0, 1700.0, 0),
+)
+# No windows means no reads, so this needs neither an SDK nor an acquisition.
+check_true("extracting no windows opens nothing", schamp.extract.extract_atds(None, []) == [])
+check_raises(
+    "a mobility map over no windows is refused rather than empty",
+    ValueError,
+    lambda: schamp.extract.mobility_map(None, []),
+)
+peaks_dir = tempfile.mkdtemp(prefix="schamp-peaks-")
+try:
+    peaks_path = os.path.join(peaks_dir, "peaks.csv")
+    schamp.extract.write_peaks_csv(peaks_path, grid[:3])
+    round_trip = schamp.extract.read_peaks_csv(peaks_path)
+    check_true(
+        "a peaks file round trips at full precision",
+        len(round_trip) == 3
+        and all(
+            round_trip[i].low == grid[i].low and round_trip[i].high == grid[i].high
+            for i in range(3)
+        ),
+    )
+    with open(peaks_path, encoding="utf-8") as fh:
+        check_true("a peaks file declares its window count first", fh.readline().startswith("3,"))
+    # cdctest read exactly the declared count and ignored the rest of the file.
+    with open(peaks_path, "a", encoding="utf-8") as fh:
+        fh.write("999.0,1000.0\n")
+    check_true(
+        "a peaks file's declared count wins over its extra rows",
+        len(schamp.extract.read_peaks_csv(peaks_path)) == 3,
+    )
+    # The three mistyped rows of the 2013 anion peaks file, which cdctest read silently.
+    bad_path = os.path.join(peaks_dir, "bad.csv")
+    with open(bad_path, "w", encoding="utf-8") as fh:
+        fh.write("3,\n295.5,230.5\n284.7,585.7\n1224.4,1125.4\n")
+    check_raises(
+        "an inverted row of a peaks file is refused, naming the row",
+        ValueError,
+        lambda: schamp.extract.read_peaks_csv(bad_path),
+    )
+    short_path = os.path.join(peaks_dir, "short.csv")
+    with open(short_path, "w", encoding="utf-8") as fh:
+        fh.write("5,\n300.5,301.5\n")
+    check_raises(
+        "a peaks file that declares more windows than it carries is refused",
+        ValueError,
+        lambda: schamp.extract.read_peaks_csv(short_path),
+    )
+finally:
+    shutil.rmtree(peaks_dir, ignore_errors=True)
+
+# --------------------------------------------------------------------------------
 section("mobility")
 # Eqn (3) with L = 25.05 cm: a slope of L^2/K ms V corresponds to K exactly.
 for k_expected in (1.0, 4.2, 12.7):
@@ -405,9 +486,6 @@ section("the layers that are not built yet")
 # A stub that returned something plausible would be far worse than one that raises.
 for name, call in (
     ("atd.fit_gaussian", lambda: schamp.atd.fit_gaussian(atd)),
-    ("extract.extract_atd", lambda: schamp.extract.extract_atd(None, schamp.extract.MzWindow(1.0, 2.0))),
-    ("extract.extract_atds", lambda: schamp.extract.extract_atds(None, [])),
-    ("extract.mobility_map", lambda: schamp.extract.mobility_map(None, [])),
     ("mobility.regress", lambda: schamp.mobility.regress([], profile)),
 ):
     check_raises(f"{name} is honestly unimplemented", NotImplementedError, call)
@@ -472,6 +550,71 @@ else:
         low, high = readers.info.GetAcquisitionMassRange(0)
         mobillogram_bins, intensities = readers.chrom.ReadMobillogram(0, 0, scans - 1, low, high)
         axis = schamp.extract.drift_axis(readers, 0)
+
+        # The extraction layer over the same acquisition. The whole mass range in one
+        # window is the same read as the mobillogram above, so the two must agree
+        # exactly; a grid over it must conserve the counts to within the shared bounds
+        # that carry a data point, which is what window_edges_on_data enumerates.
+        whole = schamp.extract.MzWindow(float(low), float(high), "acquisition mass range")
+        whole_atd = schamp.extract.extract_atd(readers, whole)
+        smoke_scans = schamp.extract.scan_range(readers, 0)
+        smoke_grid = schamp.extract.contiguous_windows(float(low), float(high), 8)
+        centres, grid_times, grid_intensity = schamp.extract.mobility_map(readers, smoke_grid)
+        shared_edges = schamp.extract.window_edges_on_data(readers, smoke_grid)
+        first_scan_only = schamp.extract.extract_atd(readers, whole, scans=(0, 0))
+        check_raises(
+            "a reversed scan range is refused rather than read as zeros",
+            ValueError,
+            lambda: schamp.extract.scan_range(readers, 0, (5, 2)),
+        )
+        check_raises(
+            f"a scan range past the end of the function is refused ({scans} scans)",
+            ValueError,
+            lambda: schamp.extract.scan_range(readers, 0, (0, scans)),
+        )
+    check_true(
+        "the whole mass range in one window is the mobillogram read",
+        len(whole_atd.intensity) == drift_bins
+        and np.array_equal(whole_atd.intensity, np.asarray(intensities, dtype=float))
+        and np.array_equal(whole_atd.drift_time_ms, axis),
+    )
+    check_true(
+        f"the scan range covers every scan of the function (0 to {scans - 1})",
+        smoke_scans == (0, scans - 1),
+    )
+    check_true(
+        "one retention scan carries less than all of them",
+        0.0 < first_scan_only.total <= whole_atd.total,
+    )
+    check_true(
+        f"a mobility map is (windows, bins) = {grid_intensity.shape}",
+        grid_intensity.shape == (len(smoke_grid), drift_bins)
+        and len(centres) == len(smoke_grid)
+        and np.array_equal(grid_times, axis),
+    )
+    # A grid over the same span as one wide read carries the same counts twice over, but
+    # not to the last count: the SDK accumulates intensity in single precision, and a
+    # whole-mass-range read is far past the 2**24 counts per bin that survives that
+    # exactly. Points sitting on a shared bound add to the excess on top. Each internal
+    # bound is listed twice by window_edges_on_data, as one window's high and the next
+    # one's low; count the highs.
+    excess = float(grid_intensity.sum()) - whole_atd.total
+    internal = [
+        e for e in shared_edges if e["side"] == "high" and e["window"] < len(smoke_grid) - 1
+    ]
+    budget = 1e-4 * whole_atd.total + sum(e["counts"] for e in internal)
+    check_true(
+        f"a contiguous grid matches one wide read to single precision (excess {excess:.0f} "
+        f"of {whole_atd.total:.0f}, {len(internal)} shared bound(s) carrying data)",
+        abs(excess) <= budget,
+    )
+    check_true(
+        f"the intensities are single precision (max bin {whole_atd.intensity.max():.0f}, "
+        f"exact to {schamp.extract.COUNTS_EXACT_TO})",
+        np.array_equal(
+            whole_atd.intensity, whole_atd.intensity.astype(np.float32).astype(float)
+        ),
+    )
     check_true(
         "opens a .raw and reads a mobillogram",
         drift_bins > 0
