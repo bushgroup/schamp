@@ -1,0 +1,11 @@
+$$ Version: 01.00
+$$ Acquired Name: SYNTHETIC
+$$ Instrument: SYNAPT-G2#NotSet
+$$ Cal MS1 Static: 0.000000000000000e0,1.000000000000000e0,T0
+$$ Cal Time: 13:36
+$$ Cal Date: 01/21/13
+$$ Cal Function 1: 7.472570630168562e-3,9.997778508664235e-1,-7.096970379984908e-7,4.609145074701771e-9,T1
+$$ Cal Function 2: 0.000000000000000e0,1.000000000000000e0,T1
+$$ Cal Function 3: not,numbers,T1
+$$ Cal StdDev Function 1: 0.000000000000000e0
+not a header line at all

@@ -16,8 +16,9 @@ Waters SDK:
 Around them sit the things that describe the measurement rather than perform it:
 `profiles` (the cell geometry and the drift-voltage definition, per instrument),
 `experiment` (which acquisitions, at what pressure and temperature), `extern` (the
-one read the SDK does not offer), `constants` (CODATA and the closed forms), and
-`sdk` (finding the license key and opening the readers).
+two reads the SDK does not offer), `calibration` (the acquisition's two m/z frames,
+and where a window has to be placed to land on an ion), `constants` (CODATA and the
+closed forms), and `sdk` (finding the license key and opening the readers).
 
 Everything but `extract` and `sdk` runs on a machine with no SDK, no license and no
 acquisition, which is what `tools/check_public.py` exercises.

@@ -37,6 +37,7 @@ import schamp.mobility
 import schamp.profiles
 import schamp.report
 import schamp.sdk
+import schamp.spectrum
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(schamp.ROOT, "tests", "fixtures")
@@ -244,6 +245,131 @@ check_true("a missing directory parses to nothing", schamp.extern.parse_extern_i
 check_true("a bad argument parses to nothing", schamp.extern.parse_extern_inf(os.devnull) == {})
 
 # --------------------------------------------------------------------------------
+section("_HEADER.TXT and the calibration function")
+if not os.path.isfile(os.path.join(FIXTURES, schamp.extern.HEADER_FILENAME)):
+    skip("_HEADER.TXT fixture parses", "tests/fixtures/_HEADER.TXT is missing")
+else:
+    header = schamp.extern.parse_header_txt(FIXTURES)
+    check_true("the fixture parses to a mapping", len(header) >= 8)
+    check_true(
+        "a value containing colons survives", header.get("Cal Time") == "13:36"
+    )
+    check_true(
+        "a line with no $$ is not a key",
+        not any("not a header line" in key for key in header),
+    )
+    cubic = schamp.extern.cal_function_coefficients(FIXTURES, 1)
+    check_true("a cubic calibration reads as four coefficients", len(cubic) == 4)
+    check_close("its leading coefficient", cubic[0], 7.472570630168562e-3)
+    check_true(
+        "the identity function is read, not skipped",
+        schamp.extern.cal_function_coefficients(FIXTURES, 2) == (0.0, 1.0),
+    )
+    check_true(
+        "an unparseable calibration is None, not a partial one",
+        schamp.extern.cal_function_coefficients(FIXTURES, 3) is None,
+    )
+    check_true(
+        "an absent function is None",
+        schamp.extern.cal_function_coefficients(FIXTURES, 9) is None,
+    )
+    check_true(
+        "a similar key is not mistaken for the calibration",
+        "Cal StdDev Function 1" in header,
+    )
+
+    calibration = importlib.import_module("schamp.calibration")
+    cal = calibration.CalFunction.from_raw(FIXTURES, 1)
+    check_true("the cubic loads as order 3", cal.order == 3 and not cal.is_identity)
+    # The two frames, round trip. Nothing here asserts a displacement of any
+    # particular size -- that is the acquisition's business -- only that the
+    # conversion is invertible to double precision, which is what a window depends on.
+    for mz in (230.1146, 800.4261, 1650.8568):
+        spectrum = cal.to_spectrum_frame(mz)
+        check_close(
+            f"the calibration function inverts at {mz:g} Th",
+            cal.to_chromatogram_frame(spectrum),
+            mz,
+            rel=1e-12,
+        )
+    check_true(
+        "it moves a mass by a sane amount, not by an order of magnitude",
+        abs(cal.to_spectrum_frame(800.0) - 800.0) < 1.0,
+    )
+    check_true(
+        "an array goes in and an array comes out",
+        np.asarray(cal.to_chromatogram_frame(np.array([300.0, 900.0]))).shape == (2,),
+    )
+    identity = calibration.CalFunction.identity()
+    check_true("the identity is recognised as one", identity.is_identity)
+    check_true(
+        "and changes nothing", identity.to_chromatogram_frame(1234.5) == 1234.5
+    )
+    check_true(
+        "an acquisition with no header is the identity by default",
+        calibration.CalFunction.from_raw("no/such/dir").is_identity,
+    )
+    check_raises(
+        "unless the caller says an absent function must raise",
+        calibration.CalibrationError,
+        lambda: calibration.CalFunction.from_raw("no/such/dir", missing_is_identity=False),
+    )
+    check_raises(
+        "a one-coefficient calibration is refused",
+        calibration.CalibrationError,
+        lambda: calibration.CalFunction(coefficients=(1.0,)),
+    )
+    check_raises(
+        "a non-positive m/z is refused, since sqrt(m/z) is the variable",
+        calibration.CalibrationError,
+        lambda: cal.to_spectrum_frame(0.0),
+    )
+    check_true("the description names the order", "order 3" in cal.describe())
+    check_true("and the identity says so", "identity" in identity.describe())
+
+    # A recalibration recovers a known displacement. Synthetic on purpose: a fit whose
+    # answer is known exactly is the only way to test a fit.
+    true_mz = np.array([230.11, 301.15, 443.23, 656.34, 869.45, 1082.56, 1437.75])
+    displaced = (1.0002 * np.sqrt(true_mz) - 0.0035) ** 2
+    recal = calibration.Recalibration.fit(true_mz, displaced, order=1)
+    check_true("an order-1 recalibration fits its own displacement", recal.rms_th < 1e-9)
+    check_close("and recovers it", recal.to_measured(800.0), (1.0002 * math.sqrt(800.0) - 0.0035) ** 2)
+    check_close("and inverts", recal.to_true(recal.to_measured(800.0)), 800.0, rel=1e-12)
+    check_true("it reports the range it was fitted over", recal.covers(800.0) and not recal.covers(1800.0))
+    check_true("and says what it did", "order 1" in recal.describe())
+    check_raises(
+        "a recalibration with too few species to leave a residual is refused",
+        calibration.CalibrationError,
+        lambda: calibration.Recalibration.fit(true_mz[:2], displaced[:2], order=1),
+    )
+    check_raises(
+        "and mismatched series are refused",
+        calibration.CalibrationError,
+        lambda: calibration.Recalibration.fit(true_mz, displaced[:-1]),
+    )
+
+    frame = calibration.MzFrame(cal=cal, recalibration=recal)
+    check_close(
+        "MzFrame applies the recalibration and then the frame conversion",
+        frame.reader_mz(800.0),
+        cal.to_chromatogram_frame(recal.to_measured(800.0)),
+    )
+    check_close("and inverts both", frame.computed_mz(frame.reader_mz(800.0)), 800.0, rel=1e-10)
+    check_true(
+        "a frame with no recalibration applies only the conversion",
+        calibration.MzFrame(cal=cal).reader_mz(800.0) == cal.to_chromatogram_frame(800.0),
+    )
+    check_true("the identity frame is one", calibration.MzFrame.identity().is_identity)
+    check_true(
+        "the description names both steps",
+        "cal function" in frame.describe() and "recalibration" in frame.describe(),
+    )
+    check_true(
+        "and says so when there is no recalibration",
+        "recalibration: none" in calibration.MzFrame(cal=cal).describe(),
+    )
+
+# --------------------------------------------------------------------------------
 section("the experiment data model")
 work = tempfile.mkdtemp(prefix="schamp-check-")
 try:
@@ -327,6 +453,110 @@ try:
     check_true("figure defaults keep vector text as text", schamp.report.figure_defaults()["pdf.fonttype"] == 42)
 finally:
     shutil.rmtree(work, ignore_errors=True)
+
+# --------------------------------------------------------------------------------
+section("mass spectra and measured peak widths")
+_frame_cal = importlib.import_module("schamp.calibration")
+# A real linear calibration function, from a 2013 acquisition: near enough the identity
+# that it is easy to miss, and far enough from it to move a peak by a tenth of a Th.
+_shift = _frame_cal.CalFunction(coefficients=(0.006330094772637646, 0.999727577300022))
+# A synthetic profile on a real axis: time-of-flight channels, so the spacing grows as
+# sqrt(m/z) and a peak is three points wide, which is what the 2013 acquisitions give
+# and what the measurement has to survive. Two peaks of known width and known
+# resolving power, and one too weak to measure.
+_root = np.arange(math.sqrt(200.0), math.sqrt(1200.0), 2.19e-4)
+_axis = _root**2
+_profile = np.zeros_like(_axis)
+for _centre, _height, _power in ((300.0, 1.0e5, 20000.0), (800.0, 2.0e5, 20000.0), (500.0, 30.0, 20000.0)):
+    _sigma = _centre / _power / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+    _profile += _height * np.exp(-0.5 * ((_axis - _centre) / _sigma) ** 2)
+spectrum = schamp.spectrum.MassSpectrum(
+    mz=_axis, intensity=_profile, acquisition="synthetic", summed_over="a check, not an acquisition"
+)
+peak = spectrum.peak_near(800.0)
+check_close("a peak's centroid is its centre", peak.mz, 800.0, rel=2e-6)
+check_true(
+    "a peak of R = 20000 measures near it, on a three-point profile",
+    18000 < peak.resolving_power < 22000,
+)
+check_true("and the peak is resolved on both sides", peak.resolved)
+check_true("a peak this narrow is a few channels wide", 2 <= peak.points_above_half <= 5)
+check_close(
+    "the m/z step is the axis's own, and grows as sqrt(m/z)",
+    spectrum.mz_step_at(800.0) / spectrum.mz_step_at(200.0),
+    math.sqrt(800.0 / 200.0),
+    rel=1e-3,
+)
+check_true("a species that is not there measures as None", spectrum.peak_near(650.0) is None)
+check_true(
+    "a species below the apex threshold measures as None",
+    spectrum.peak_near(500.0, min_apex=1.0e3) is None,
+)
+check_true(
+    "...but is there when nothing is asked of it", spectrum.peak_near(500.0) is not None
+)
+check_raises(
+    "a descending m/z axis is refused",
+    ValueError,
+    lambda: schamp.spectrum.MassSpectrum(mz=_axis[::-1], intensity=_profile),
+)
+# An empty spectrum is a real outcome -- one drift bin of one scan can hold nothing --
+# so it is representable, says so, and refuses only the question that has no answer.
+_empty = schamp.spectrum.MassSpectrum(mz=np.array([]), intensity=np.array([]))
+check_true("an empty spectrum is representable and says so", _empty.is_empty)
+check_true("...and measures no peaks rather than raising", _empty.peak_near(800.0) is None)
+check_true("...and totals zero", _empty.total == 0.0)
+check_raises("...but has no m/z range", ValueError, lambda: _empty.mz_range)
+check_true(
+    "a spectrum of zeros is empty too",
+    schamp.spectrum.MassSpectrum(mz=_axis, intensity=np.zeros_like(_axis)).is_empty,
+)
+check_true("a real spectrum is not empty", not spectrum.is_empty)
+check_raises(
+    "so are mismatched arrays",
+    ValueError,
+    lambda: schamp.spectrum.MassSpectrum(mz=_axis, intensity=_profile[:-1]),
+)
+
+_measured = schamp.extract.MzWindow.around_measured(800.0, spectrum, label="synthetic")
+check_close(
+    "a measured window is `widths` FWHM across",
+    _measured.width,
+    schamp.extract.WINDOW_WIDTHS_DEFAULT * peak.fwhm,
+    rel=1e-12,
+)
+check_close("and centres on the measured peak", _measured.centre, peak.mz, rel=1e-12)
+check_true(
+    "and says it came from a measurement",
+    "measured peak" in _measured.frame_note and _measured.computed_mz == 800.0,
+)
+_measured_framed = schamp.extract.MzWindow.around_measured(
+    800.0, spectrum, frame=_frame_cal.MzFrame(cal=_shift)
+)
+check_close(
+    "a framed measured window converts the peak into the reader's frame",
+    _measured_framed.centre,
+    _shift.to_chromatogram_frame(peak.mz),
+    rel=1e-9,
+)
+check_raises(
+    "a species too weak to measure refuses rather than guessing",
+    ValueError,
+    lambda: schamp.extract.MzWindow.around_measured(500.0, spectrum, min_apex=1.0e3),
+)
+_fallback = schamp.extract.MzWindow.around_measured(
+    500.0, spectrum, min_apex=1.0e3, fallback_width=0.5
+)
+check_close("unless a fallback width is given", _fallback.width, 0.5, rel=1e-12)
+check_true(
+    "and then the window says the width was a fallback",
+    "fallback" in _fallback.frame_note,
+)
+check_raises(
+    "a non-positive number of widths is refused",
+    ValueError,
+    lambda: schamp.extract.MzWindow.around_measured(800.0, spectrum, widths=0.0),
+)
 
 # --------------------------------------------------------------------------------
 section("arrival-time distributions")
@@ -416,6 +646,31 @@ window = schamp.extract.MzWindow.around(789.4062, 0.3, "n=22, 2-", charge=-2, io
 check_close("a window centres on the m/z it was built around", window.centre, 789.4062, rel=1e-12)
 check_close("a window keeps the width it was given", window.width, 0.3, rel=1e-12)
 check_true("a window carries the charge the mobility layer needs", window.charge == -2)
+check_true(
+    "a window placed with no frame records that it was placed with no frame",
+    window.computed_mz == 789.4062 and window.frame_note == "",
+)
+_framed = schamp.extract.MzWindow.around(789.4062, 0.15, "n=22, 2-", frame=_frame_cal.MzFrame(cal=_shift))
+check_close(
+    "a framed window centres where the chromatogram reader puts the ion",
+    _framed.centre,
+    _shift.to_chromatogram_frame(789.4062),
+    rel=1e-12,
+)
+check_true(
+    "the two differ by more than a rounding, on a real calibration function",
+    abs(_framed.centre - 789.4062) > 1e-3,
+)
+check_true(
+    "and the framed window says what was applied, so it is never silent",
+    _framed.computed_mz == 789.4062 and "cal function" in _framed.frame_note,
+)
+check_close(
+    "an identity frame places a window exactly where an unframed one goes",
+    schamp.extract.MzWindow.around(789.4062, 0.15, frame=_frame_cal.MzFrame.identity()).centre,
+    window.centre,
+    rel=1e-15,
+)
 check_raises(
     "a window far narrower than any m/z step is refused",
     ValueError,
@@ -831,6 +1086,25 @@ else:
             ValueError,
             lambda: schamp.extract.scan_range(readers, 0, (0, scans)),
         )
+
+        # The spectrum side of the same acquisition, which is the frame a species is
+        # found in rather than the frame a window bound is on.
+        smoke_total = schamp.extract.total_spectrum(readers)
+        smoke_one_scan = schamp.extract.total_spectrum(readers, scans=(0, 0))
+        # One drift bin of one retention scan. On a real mobility acquisition that can
+        # be a handful of points or none, which is an ordinary outcome and must not
+        # raise -- the first bin of the first scan is before the ions arrive.
+        smoke_one_bin = schamp.extract.total_spectrum(readers, scans=(0, 0), drift=(0, 0))
+        check_raises(
+            "a reversed drift range is refused rather than returning nothing",
+            ValueError,
+            lambda: schamp.extract.total_spectrum(readers, drift=(10, 5)),
+        )
+        check_raises(
+            "a drift range past the end is refused",
+            ValueError,
+            lambda: schamp.extract.total_spectrum(readers, drift=(0, 10**6)),
+        )
     check_true(
         "the whole mass range in one window is the mobillogram read",
         len(whole_atd.intensity) == drift_bins
@@ -888,6 +1162,39 @@ else:
         and axis[0] == 0.0
         and math.isclose(spacing.min(), spacing.max(), rel_tol=1e-4),
     )
+    check_true(
+        f"the total spectrum is {len(smoke_total.mz)} points over "
+        f"{smoke_total.mz_range[0]:.1f}-{smoke_total.mz_range[1]:.1f} Th",
+        len(smoke_total.mz) > 1000 and smoke_total.total > 0.0,
+    )
+    check_true(
+        "and it says what it was summed over",
+        "all" in smoke_total.summed_over and smoke_total.acquisition == smoke_raw,
+    )
+    # A subset of everything. Cheap, and it is the check that a narrowed combine
+    # actually narrows rather than silently returning the lot.
+    check_true(
+        "a narrowed combine carries less than the whole",
+        0.0 < smoke_one_scan.total < smoke_total.total,
+    )
+    check_true(
+        f"the emptiest slice of the acquisition is representable "
+        f"({len(smoke_one_bin.mz)} points, {smoke_one_bin.total:.0f} counts)",
+        smoke_one_bin.total <= smoke_one_scan.total
+        and smoke_one_bin.is_empty == (smoke_one_bin.total <= 0.0),
+    )
+    # The frame conversion on the real acquisition: whatever its calibration function
+    # is, a window placed through it has to invert.
+    real_cal = _frame_cal.CalFunction.from_raw(smoke_raw)
+    check_true(f"its calibration function reads ({real_cal.describe()})", real_cal.order >= 1)
+    probe_mz = 0.5 * (smoke_total.mz_range[0] + smoke_total.mz_range[1])
+    check_close(
+        "the acquisition's own frame conversion inverts",
+        real_cal.to_spectrum_frame(real_cal.to_chromatogram_frame(probe_mz)),
+        probe_mz,
+        rel=1e-12,
+    )
+
     extern = schamp.extern.parse_extern_inf(smoke_raw)
     if extern:
         check_true(

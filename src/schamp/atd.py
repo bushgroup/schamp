@@ -43,6 +43,14 @@ class ATD:
     `mz_low` and `mz_high` are the window as the extraction asked for it, and `label`
     names what the window is meant to contain (`"n=22, 2-"`), because a bare m/z range
     is not a species. `acquisition` is the `.raw` this came from.
+
+    `mz_computed` and `mz_frame` are the record of *why* the window sits where it does.
+    A window placed through a `calibration.MzFrame` is centred on the chromatogram
+    reader's frame rather than on the species' computed m/z, so the two differ, and the
+    difference has to be readable afterwards or the extraction is silently not what it
+    says. `mz_computed` is the species' m/z as the analysis computed it and `mz_frame`
+    is the frame's one-line description; both are empty when the window was placed
+    directly.
     """
 
     drift_bin: np.ndarray
@@ -52,6 +60,8 @@ class ATD:
     mz_high: float
     acquisition: str = ""
     label: str = ""
+    mz_computed: float | None = None
+    mz_frame: str = ""
 
     def __post_init__(self) -> None:
         lengths = {len(self.drift_bin), len(self.drift_time_ms), len(self.intensity)}

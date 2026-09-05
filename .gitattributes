@@ -9,3 +9,7 @@
 # fixture is that the parser copes with what the instrument actually writes, so
 # normalising it would quietly remove what it tests.
 tests/fixtures/_extern.inf -text
+
+# Same reason, for the header sidecar: `_HEADER.TXT` is CRLF as MassLynx writes it,
+# and the fixture is there to prove the parser copes with the real line endings.
+tests/fixtures/_HEADER.TXT -text

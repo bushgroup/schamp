@@ -50,28 +50,32 @@ those the step goes to exactly one of the two neighbours. At the fifth it goes t
 So a grid is a partition with rare exceptions rather than by construction, and the
 exceptions are the same bounds `window_edges_on_data` names.
 
-### The mass range is not the calibrated m/z axis
+### The mass range is not the axis the spectrum readers return
 
-Third measured property, and the one to keep in mind when choosing a width. The mass
-range this reader is given is not the calibrated m/z axis. On the 2013 acquisitions a
-peak of known m/z appears low at low mass and high at high mass -- from about -0.08 Th at
-300 Th to +0.16 Th at 1156 Th, crossing zero near 540 Th, which is the shape of a
-calibration difference rather than a fixed shift. The same peak read through the
-drift-scan reader sits within 1 ppm of its computed m/z, and the two readers agree
-exactly on total counts over the whole mass range, so nothing is lost; it is redistributed
-in m/z.
+Third measured property, and the one to keep in mind when choosing a width. **The mass
+range this reader is given is not the m/z axis `ReadScan`, `ReadDriftScan` and the scan
+processor return.** A peak of known m/z can sit tens of milli-Th from its computed value
+in this reader's frame, and the displacement varies smoothly with m/z rather than being
+a fixed shift or a fixed ppm. The two readers do agree exactly on total counts over a
+whole mass range, so nothing is lost; it is redistributed in m/z.
 
-The 0.2 Th windows the 2013 analysis typed by hand sit clear of the peak at the ends of
-its mass range for that reason. It cost that analysis nothing, because every isotopologue
-of an ion has the same mobility and so sampling a peak's shoulder costs counts and not
-drift time -- but a window narrow enough to clip is a window whose contents depend on a
-calibration offset nobody wrote down.
+Neither reader is wrong. The difference between them is the acquisition's own
+`$$ Cal Function N` -- a mass-calibration polynomial the spectrum readers apply and this
+one does not -- and `calibration` converts between the two frames from the acquisition's
+own coefficients (lab record, task 10). A second and separate thing can displace *both*
+frames together, and does on badly calibrated data: the acquisition's own mass accuracy.
+`calibration.Recalibration` is the optional correction for that, fitted from species of
+known m/z.
 
-**Give a window room.** One Th is generous at these masses and costs nothing when the
-neighbouring species are 35 Th away. Where crowding does not allow it, measure where the
-peak actually lands before trusting a narrow window (lab record, task 04, which measures
-it for one instrument and leaves to the layer that places analysis windows the question
-of whether to correct for it).
+**Place the window in the reader's frame**, which is `MzWindow.around(mz, width,
+frame=...)` with a `calibration.MzFrame`. What the window can then be is a width chosen
+for the peak, instead of a width wide enough to straddle an offset nobody wrote down.
+Without a frame nothing is converted, which is the behaviour this module had before the
+conversion existed and is still the right choice when the offset is small against the
+width -- but the two must be comparable, so a window records which it was.
+
+Whichever is chosen, **give a bound room**: the section above is about where a bound
+lands, and no calibration makes a bound in a peak's flank safe.
 
 ### Intensities are single precision
 
@@ -98,12 +102,15 @@ from dataclasses import dataclass
 import numpy as np
 
 from .atd import ATD
+from .calibration import MzFrame
 from .sdk import Readers
+from .spectrum import MassSpectrum, SpectrumPeak
 
 __all__ = [
     "COUNTS_EXACT_TO",
     "MZ_BOUND_PROBE_RELATIVE",
     "MZ_WINDOW_FLOOR_RELATIVE",
+    "WINDOW_WIDTHS_DEFAULT",
     "MzWindow",
     "contiguous_windows",
     "drift_axis",
@@ -112,6 +119,7 @@ __all__ = [
     "mobility_map",
     "read_peaks_csv",
     "scan_range",
+    "total_spectrum",
     "window_edges_on_data",
     "write_peaks_csv",
 ]
@@ -131,6 +139,15 @@ MZ_BOUND_PROBE_RELATIVE = 2.0e-7
 # caller's business, and the instrument's own step is the floor that actually matters --
 # `window_edges_on_data` is how to find out where it falls.
 MZ_WINDOW_FLOOR_RELATIVE = 1.0e-6
+
+# How many measured peak widths an analysis window spans, when its width comes from the
+# spectrum rather than from a number typed in Th (decision of record, lab record
+# task 10). Three full widths at half maximum is +/- 1.5 FWHM, which is +/- 3.5 standard
+# deviations of a Gaussian peak and so holds essentially all of one isotopologue, while
+# staying clear of the next: on the 2013 acquisitions it is 0.06 Th at 230 Th and 0.37 Th
+# at 1650 Th, against isotope spacings of 1.003 Th at 1+ and 0.5 Th at 2+. Widen it only
+# with a reason, and never to catch more counts -- a centroid is a ratio.
+WINDOW_WIDTHS_DEFAULT = 3.0
 
 # The largest count in one drift bin that the SDK's single-precision intensities still
 # represent exactly, 2**24. Above it the returned value is quantised in steps of 2, then
@@ -163,6 +180,8 @@ class MzWindow:
     label: str = ""
     charge: int | None = None
     ion_mass_da: float | None = None
+    computed_mz: float | None = None
+    frame_note: str = ""
 
     def __post_init__(self) -> None:
         if not (self.high > self.low):
@@ -182,6 +201,8 @@ class MzWindow:
         label: str = "",
         charge: int | None = None,
         ion_mass_da: float | None = None,
+        *,
+        frame: MzFrame | None = None,
     ) -> MzWindow:
         """A window of full width `width` Th centred on `mz`.
 
@@ -191,6 +212,16 @@ class MzWindow:
         this module's docstring says why a bound in a valley is worth more than a narrow
         window, and `window_edges_on_data` says where the bounds actually fell. Only an
         absurd width is refused here, `MZ_WINDOW_FLOOR_RELATIVE`.
+
+        **Pass `frame` and the window is centred where the reader will actually put the
+        ion**, which is `calibration.MzFrame.reader_mz(mz)` and not `mz`: the bounds this
+        reader takes are on the acquisition's uncorrected axis, and on an acquisition
+        that carries a mass-calibration function the two are not the same number. Without
+        `frame` nothing is converted and the behaviour is what it always was -- placing
+        a window in the wrong frame is a defensible choice when the offset is small
+        against the width, and it must stay available so the two can be compared. Either
+        way the window records which it was: `computed_mz` is what the species is and
+        `frame_note` says what was applied.
         """
         if width <= 0.0:
             raise ValueError(f"a window width must be positive; got {width}")
@@ -202,12 +233,111 @@ class MzWindow:
                 "far below it); the reader would widen it to one step and the width "
                 "would mean nothing"
             )
+        centre = float(frame.reader_mz(float(mz))) if frame is not None else float(mz)
         return cls(
-            low=float(mz) - 0.5 * float(width),
-            high=float(mz) + 0.5 * float(width),
+            low=centre - 0.5 * float(width),
+            high=centre + 0.5 * float(width),
             label=label,
             charge=charge,
             ion_mass_da=ion_mass_da,
+            computed_mz=float(mz),
+            frame_note=frame.describe() if frame is not None else "",
+        )
+
+    @classmethod
+    def around_measured(
+        cls,
+        mz: float,
+        spectrum: MassSpectrum,
+        *,
+        widths: float = WINDOW_WIDTHS_DEFAULT,
+        frame: MzFrame | None = None,
+        label: str = "",
+        charge: int | None = None,
+        ion_mass_da: float | None = None,
+        min_apex: float = 0.0,
+        fallback_width: float | None = None,
+    ) -> MzWindow:
+        """A window on the peak this species actually has, `widths` FWHM wide.
+
+        The constructor to reach for when a total spectrum is in hand, and the reason to
+        take one (decision of record, lab record task 10). Both halves of the window come
+        from the measurement rather than from a rule:
+
+        - **where** -- the peak's own centroid, so nothing has to be assumed about the
+          acquisition's mass accuracy. `frame` is still applied, because the centroid is
+          in the spectrum frame and `ReadMobillogram` is addressed in the other one; only
+          the calibration function is used for that, since a measured position needs no
+          recalibration. A `frame` carrying one still uses it to *look* in the right
+          place.
+        - **how wide** -- `widths` times the measured full width at half maximum. A width
+          in Th is a different number of peak widths at every m/z: on the 2013
+          acquisitions a peak is 0.019 Th wide at 230 Th and 0.122 Th at 1650 Th, so one
+          fixed number is eight peaks at the bottom of a range and barely one at the top.
+
+        A species too weak to measure -- no peak clearing `min_apex` in the search window
+        -- raises, unless `fallback_width` in Th is given, in which case the window is
+        built on the computed m/z through `frame` at that width and says so in
+        `frame_note`. There is no silent fallback: a window placed by a rule and a window
+        placed on a measurement are different measurements and have to stay
+        distinguishable afterwards.
+        """
+        if widths <= 0.0:
+            raise ValueError(f"a window spans a positive number of peak widths; got {widths}")
+        expected = float(mz)
+        if frame is not None and frame.recalibration is not None:
+            expected = float(frame.recalibration.to_measured(expected))
+
+        peak: SpectrumPeak | None = spectrum.peak_near(expected, min_apex=min_apex)
+        if peak is None:
+            if fallback_width is None:
+                raise ValueError(
+                    f"no peak clearing {min_apex:g} counts within the search window of "
+                    f"{label or f'{mz:g} Th'} in {spectrum.acquisition or 'the spectrum'}; "
+                    "pass fallback_width to place a window by rule instead, and it will "
+                    "say that is what happened"
+                )
+            window = cls.around(
+                mz,
+                fallback_width,
+                label=label,
+                charge=charge,
+                ion_mass_da=ion_mass_da,
+                frame=frame,
+            )
+            return cls(
+                low=window.low,
+                high=window.high,
+                label=window.label,
+                charge=window.charge,
+                ion_mass_da=window.ion_mass_da,
+                computed_mz=window.computed_mz,
+                frame_note=(
+                    f"{window.frame_note}; peak not measurable, width "
+                    f"{fallback_width:g} Th by fallback"
+                ),
+            )
+
+        half = 0.5 * float(widths) * peak.fwhm
+        low, high = peak.mz - half, peak.mz + half
+        if frame is not None:
+            low = float(frame.cal.to_chromatogram_frame(low))
+            high = float(frame.cal.to_chromatogram_frame(high))
+        note = (
+            f"{frame.describe() if frame is not None else 'no frame applied'}; "
+            f"centred on a measured peak at {peak.mz:.4f} Th, width {widths:g} x "
+            f"{peak.fwhm:.4f} Th FWHM"
+        )
+        if not peak.resolved:
+            note += " (an unresolved shoulder, so the width is a lower bound)"
+        return cls(
+            low=low,
+            high=high,
+            label=label,
+            charge=charge,
+            ion_mass_da=ion_mass_da,
+            computed_mz=float(mz),
+            frame_note=note,
         )
 
     @property
@@ -341,6 +471,65 @@ def scan_range(
     return first, last
 
 
+def total_spectrum(
+    readers: Readers,
+    *,
+    function: int = 0,
+    scans: tuple[int, int] | None = None,
+    drift: tuple[int, int] | None = None,
+) -> MassSpectrum:
+    """The acquisition summed over retention time and arrival time, as one spectrum.
+
+    `MassLynxScanProcessor.CombineDrift(fn, firstScan, lastScan, firstDrift, lastDrift)`
+    -- the SDK's own combine, one call, and not a sum of reads. Defaults are every
+    retention scan and every drift bin, which is what "total" means; either can be
+    narrowed to an inclusive pair, and both are validated rather than left to the SDK,
+    which accepts a reversed range and returns nothing for it.
+
+    What comes back is the spectrum frame, so it is where a species *is* -- which is what
+    `MzWindow.around_measured` needs and what a window bound is not on. See `calibration`.
+
+    A note for anyone reaching past this: `MassLynxScanProcessor.LoadDrift` in SDK 5.0.0
+    cannot be used to do the same thing one bin at a time. The wrapper calls
+    `CombineDrift` with four of its five arguments and raises.
+    """
+    from masslynxsdk import MassLynxScanProcessor  # noqa: PLC0415
+
+    first_scan, last_scan = scan_range(readers, function, scans)
+    bins = int(readers.info.GetDriftScanCount(function))
+    if drift is None:
+        first_bin, last_bin = 0, bins - 1
+    else:
+        first_bin, last_bin = int(drift[0]), int(drift[1])
+        if first_bin < 0 or last_bin < 0 or last_bin < first_bin:
+            raise ValueError(
+                f"drift bins are 0-indexed, non-negative and ordered; got {drift}"
+            )
+        if last_bin >= bins:
+            raise ValueError(
+                f"the drift range {drift} runs past the end of function {function}, "
+                f"which has {bins} bins (0 to {bins - 1})"
+            )
+
+    processor = MassLynxScanProcessor()
+    processor.SetRawData(readers.scan)
+    mz, intensity = processor.CombineDrift(
+        int(function), first_scan, last_scan, first_bin, last_bin
+    ).GetScan()
+    whole_scans = scans is None
+    whole_drift = drift is None
+    return MassSpectrum(
+        mz=np.asarray(mz, dtype=float),
+        intensity=np.asarray(intensity, dtype=float),
+        acquisition=readers.path,
+        summed_over=(
+            f"function {function}, retention scans {first_scan}-{last_scan}"
+            f"{' (all)' if whole_scans else ''}, drift bins {first_bin}-{last_bin}"
+            f"{' (all)' if whole_drift else ''}"
+        ),
+    )
+
+
 def drift_axis(readers: Readers, function: int = 0) -> np.ndarray:
     """The drift-time axis of one function, in milliseconds, from the SDK.
 
@@ -387,6 +576,8 @@ def _read_window(
         mz_high=window.high,
         acquisition=readers.path,
         label=window.label,
+        mz_computed=window.computed_mz,
+        mz_frame=window.frame_note,
     )
 
 
