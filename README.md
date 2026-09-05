@@ -108,12 +108,6 @@ external/        the Waters SDK installed by install_sdk.py, and reference code 
                  (not in this repository)
 ```
 
-## Reference code
-
-`bushgroup/waters2python` is the Bush lab's wrapper around the same SDK, and the most complete set
-of worked examples of calling it from Python. `tools/bootstrap.py` clones it at a pinned commit
-into `external/` for reading. schamp calls `masslynxsdk` directly and does not depend on it.
-
 ## Development record
 
 The task history, working notes, exploration scripts, and the legacy analysis this project
