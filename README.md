@@ -11,23 +11,28 @@ Mason-Schamp equation, which converts a reduced mobility into a collision cross 
 
 ## Status
 
-This repository is at its initial commit. The package is a stub, the workflows below are planned,
-and the development record that sequences them lives in a private companion repository. The first
-release will reproduce the polyalanine measurements in Figure 1 of the 2016 paper from the
-original acquisitions.
+The pipeline runs end to end, from a set of `.raw` acquisitions to collision cross sections, and
+it reproduces the polyalanine measurements in Figure 1 of the 2016 paper from the original
+acquisitions. The worked example in [`examples/`](examples/README.md) is that reproduction,
+figure and all. There is no tagged release yet, the API is still moving, and the development
+record that sequences the work lives in a private companion repository.
 
-## What it will do
+## What it does
 
-- Read arrival-time distributions for chosen m/z windows directly from Waters `.raw` acquisitions
-  through the vendor MassLynx SDK, replacing the `cdctest.exe` step of the original workflow.
-- Fit each arrival-time distribution and report its centroid, width, and fit quality.
-- Regress drift time against reciprocal drift voltage across an acquisition series, then report
-  mobility, reduced mobility, and collision cross section in helium or nitrogen with propagated
-  uncertainties, using a per-instrument profile for the drift-voltage definition and cell length.
-- Record the conditions the `.raw` file does not carry, i.e., pressure, temperature, and gas, in
+- Reads arrival-time distributions for chosen m/z windows directly from Waters `.raw`
+  acquisitions through the vendor MassLynx SDK, replacing the `cdctest.exe` step of the original
+  workflow.
+- Places each window on the ion's own measured peak, in the m/z frame the acquisition's own
+  calibration puts the mobility reader in, rather than on the m/z its formula predicts.
+- Fits each arrival-time distribution and reports its centroid, width, and fit quality.
+- Regresses drift time against reciprocal drift voltage across an acquisition series, then
+  reports mobility, reduced mobility, and collision cross section in helium or nitrogen with
+  propagated uncertainties, using a per-instrument profile for the drift-voltage definition and
+  cell length.
+- Records the conditions the `.raw` file does not carry, i.e., pressure, temperature, and gas, in
   one conditions table per experiment.
-- Document how to acquire a drift-voltage series on an RF-confining drift cell instrument.
-  Written: [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md).
+- Documents how to acquire a drift-voltage series on an RF-confining drift cell instrument, in
+  [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md).
 
 ## Requirements
 
@@ -98,7 +103,8 @@ installs from its own download. Note that a `uv sync` following a Python version
 ## Layout
 
 ```
-src/schamp/      the package; sdk.py opens licensed SDK readers on a .raw, the rest is a stub
+src/schamp/      the package: extraction through sdk.py, then fitting, regression,
+                 cross sections, and the two config formats
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
                  check_public.py (the self-check)
 docs/            the acquisition guide, the 2016 Analyst paper and its supporting
@@ -115,5 +121,9 @@ modernizes live in a private companion repository. When it is present as a sibli
 named by the `SCHAMP_LAB` environment variable, `schamp.lab_dir()` resolves it; without it the
 package is fully functional.
 
-This repository is private and carries no license file; licensing will be resolved before any
-visibility change.
+## License
+
+BSD 3-Clause, in [`LICENSE`](LICENSE). The two papers in `docs/` are not covered by it: they are
+open access under CC-BY 3.0 and carry their own terms, and `docs/README.md` says so. Neither
+covers the Waters MassLynx SDK, which Waters licenses to you directly and which this repository
+never redistributes.
