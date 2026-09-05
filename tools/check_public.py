@@ -362,6 +362,54 @@ check_raises(
 )
 
 # --------------------------------------------------------------------------------
+section("single-Gaussian ATD fits")
+# Noiseless: the fit model is the data's own generating function, so recovery should
+# be limited only by the optimiser, not by the data -- a tight tolerance is the point.
+clean_fit = schamp.atd.fit_gaussian(atd)
+check_true("a noiseless fit converges", clean_fit.converged)
+check_close("a noiseless fit recovers the synthetic centre", clean_fit.centre_ms, centre, rel=1e-6)
+check_close("a noiseless fit recovers the synthetic sigma", clean_fit.sigma_ms, sigma, rel=1e-6)
+check_close("a noiseless fit recovers the synthetic height", clean_fit.height, 1000.0, rel=1e-6)
+check_close(
+    "resolution is centre / FWHM, unit-invariant",
+    clean_fit.resolution,
+    clean_fit.centre_ms / (clean_fit.sigma_ms * 2.35482),
+    rel=1e-12,
+)
+check_close(
+    "centre_bins divides back by the ATD's own drift-bin spacing",
+    clean_fit.centre_bins,
+    clean_fit.centre_ms / 0.0692521,
+    rel=1e-9,
+)
+check_true(
+    "a near-exact fit reports near-zero residual error",
+    clean_fit.rmsd_fraction < 1e-6 and clean_fit.area_error_fraction < 1e-6,
+)
+
+# Seeded noise: the fit should still recover the truth, and now report uncertainties.
+rng = np.random.default_rng(20260504)
+noisy_intensity = intensity + rng.normal(0.0, 5.0, size=intensity.shape)
+noisy_atd = schamp.atd.ATD(
+    bins, times, noisy_intensity, mz_low=788.2353, mz_high=794.1177, label="n=22, 2- (noisy)"
+)
+noisy_fit = schamp.atd.fit_gaussian(noisy_atd)
+check_true("a fit to noisy synthetic data converges", noisy_fit.converged)
+check_close("a noisy fit recovers the synthetic centre", noisy_fit.centre_ms, centre, rel=1e-3)
+check_close("a noisy fit recovers the synthetic sigma", noisy_fit.sigma_ms, sigma, rel=2e-2)
+check_true(
+    "a converged fit reports parameter uncertainties",
+    noisy_fit.centre_ms_err is not None
+    and noisy_fit.centre_ms_err > 0.0
+    and noisy_fit.sigma_ms_err is not None
+    and noisy_fit.sigma_ms_err > 0.0,
+)
+check_true(
+    "the true centre falls within a few fitted standard errors",
+    abs(noisy_fit.centre_ms - centre) < 5.0 * noisy_fit.centre_ms_err,
+)
+
+# --------------------------------------------------------------------------------
 section("m/z windows and the legacy peaks format")
 # Everything here is window bookkeeping, so it runs with no SDK and no acquisition.
 window = schamp.extract.MzWindow.around(789.4062, 0.3, "n=22, 2-", charge=-2, ion_mass_da=1580.8)
@@ -485,7 +533,6 @@ check_close("K0 accompanies K", xs.reduced_mobility_cm2_v_s, C.reduce_mobility(4
 section("the layers that are not built yet")
 # A stub that returned something plausible would be far worse than one that raises.
 for name, call in (
-    ("atd.fit_gaussian", lambda: schamp.atd.fit_gaussian(atd)),
     ("mobility.regress", lambda: schamp.mobility.regress([], profile)),
 ):
     check_raises(f"{name} is honestly unimplemented", NotImplementedError, call)

@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import least_squares
 
 __all__ = ["ATD", "FitResult", "Moments", "fit_gaussian", "moments"]
 
@@ -176,15 +177,83 @@ def moments(atd: ATD) -> Moments:
 def fit_gaussian(atd: ATD) -> FitResult:
     """Fit a single Gaussian to an ATD and report it with its quality metrics.
 
-    Not implemented: task 05. The signature and `FitResult` are fixed now so that
-    nothing downstream has to move when it lands.
+    The legacy method, deliberately: moments (`moments`) for the initial guess, then
+    `scipy.optimize.least_squares(..., method="lm")` -- the same Levenberg-Marquardt
+    algorithm as `FIT.py`'s `scipy.optimize.leastsq`, so the two converge to the same
+    minimum -- on `height * exp(-(t - centre)^2 / (2 sigma^2))` with no baseline term.
 
-    The intended method is the legacy one, deliberately, because reproducing the 2013
-    summary columns is how the modern fit gets validated: moments for the initial
-    guess, then least squares on `height * exp(-(t - centre)^2 / (2 sigma^2))` with no
-    baseline term. What must be added is convergence reporting and parameter
-    uncertainties, neither of which the legacy fit produced.
+    Fits against `atd.drift_time_ms`, never against the bin index: on this instrument
+    `FIT.py` fit against bins only because it defaulted a missing `Pusher Interval` key
+    to 1.0 (lab record, task 01), not by design. `Resolution`, `%Error - RMSD` and
+    `%Error - Area` are ratios that cancel whatever time unit the fit ran in -- a
+    Gaussian evaluated at the same points gives the same residuals whether its centre
+    and sigma are in bins or milliseconds -- so they reproduce the legacy columns
+    unchanged; only `centre_bins` exists to compare `Median` directly, dividing back
+    by the ATD's own drift-bin spacing.
+
+    Unlike the legacy fit, this reports whether the optimiser converged and the
+    parameter uncertainties from the Jacobian (`centre_ms_err`, `sigma_ms_err`), left
+    `None` when there are not enough points to estimate them. A fit that fails to
+    converge still returns a `FitResult` with `converged=False` rather than raising:
+    a bad fit is a quality metric, not an exception, which is the whole reason the
+    quality columns exist (lab record, task 05 background).
     """
-    raise NotImplementedError(
-        "single-Gaussian ATD fitting is task 05; schamp.atd.moments works today"
+    m = moments(atd)
+    times = np.asarray(atd.drift_time_ms, dtype=float)
+    data = np.asarray(atd.intensity, dtype=float)
+    total = float(np.sum(data))
+
+    def residuals(p: np.ndarray) -> np.ndarray:
+        height, centre, sigma = p
+        return height * np.exp(-((times - centre) ** 2) / (2.0 * sigma * sigma)) - data
+
+    sigma0 = m.sigma_ms if m.sigma_ms > 0.0 else float(np.ptp(times)) or 1.0
+    result = least_squares(residuals, [m.height, m.centre_ms, sigma0], method="lm")
+    height, centre_ms, sigma_ms = (float(v) for v in result.x)
+    sigma_ms = abs(sigma_ms)
+    converged = bool(result.success)
+
+    centre_ms_err = sigma_ms_err = None
+    degrees_of_freedom = len(data) - 3
+    if converged and degrees_of_freedom > 0:
+        residual_variance = float(np.sum(result.fun**2) / degrees_of_freedom)
+        try:
+            covariance = residual_variance * np.linalg.inv(result.jac.T @ result.jac)
+            centre_ms_err = float(np.sqrt(covariance[1, 1]))
+            sigma_ms_err = float(np.sqrt(covariance[2, 2]))
+        except np.linalg.LinAlgError:
+            pass
+
+    fit = height * np.exp(-((times - centre_ms) ** 2) / (2.0 * sigma_ms * sigma_ms))
+    residual = fit - data
+    rmsd_fraction = float(np.sqrt(np.sum(residual**2)) / total)
+
+    # The legacy sign-change trapezoid, verbatim from FIT.py: a plain trapezoid where
+    # consecutive residuals keep the same sign, and half that (the two triangles either
+    # side of the zero crossing) where they do not.
+    same_sign = (residual[:-1] >= 0) == (residual[1:] >= 0)
+    trapezoid = np.where(
+        same_sign,
+        np.abs(residual[:-1] + residual[1:]) / 2.0,
+        (np.abs(residual[:-1]) + np.abs(residual[1:])) / 4.0,
+    )
+    area_error_fraction = float(np.sum(trapezoid) / total)
+
+    resolution = float(centre_ms / (sigma_ms * 2.35482)) if sigma_ms > 0.0 else float("nan")
+    spacing = float(np.diff(times).mean()) if len(times) > 1 else float("nan")
+    centre_bins = centre_ms / spacing if spacing else float("nan")
+
+    return FitResult(
+        mz=atd.mz_centre,
+        centre_ms=centre_ms,
+        sigma_ms=sigma_ms,
+        height=height,
+        area=total,
+        resolution=resolution,
+        rmsd_fraction=rmsd_fraction,
+        area_error_fraction=area_error_fraction,
+        centre_bins=centre_bins,
+        centre_ms_err=centre_ms_err,
+        sigma_ms_err=sigma_ms_err,
+        converged=converged,
     )
