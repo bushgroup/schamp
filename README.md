@@ -52,11 +52,18 @@ cd schamp
 git config core.hooksPath .githooks
 uv sync                        # creates .venv/ from uv.lock
 uv run tools/check_public.py   # SDK-free self-check
-uv run tools/bootstrap.py      # clones the reference checkout into external/
 ```
+
+That is the whole setup. The self-check passes with no Waters SDK, no license key, and no data:
+the checks that need any of those report themselves skipped rather than failed.
 
 `uv run <script>` needs no flags and no venv activation. Use `uv run` or activate `.venv/` rather
 than a bare `python` on `PATH`.
+
+`tools/bootstrap.py` is the one script that is not for you. It clones a private Bush lab
+repository of MassLynx SDK examples into `external/`, as reading material for work on schamp
+itself, and it fails with an authentication error for anyone without access. Nothing in the
+package depends on it.
 
 `git config core.hooksPath .githooks` is per-clone and not tracked by git. Without it, commits do
 not receive the `Assisted-by:` trailer rewrite, and nothing refuses an oversized file or a `.raw`
