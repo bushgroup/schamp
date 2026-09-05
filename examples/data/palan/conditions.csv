@@ -1,0 +1,34 @@
+# 130423 poly-DL-alanine cations (ES+), the cation half of the same
+# drift-voltage series analysed in Allen, Giles, Gilbert & Bush, Analyst 2016,
+# 141, 884.
+#
+# No voltage column: every drift voltage comes from the acquisition's own
+# _extern.inf through the uw-synapt-g2 profile. Pressures are the MKS
+# Baratron 626B readings taken at the time of acquisition; nothing inside the
+# .raw records them. The temperature is the single value used throughout the
+# published analysis and carries no independently recorded provenance, which
+# is why it has no uncertainty here. `use` marks the ten acquisitions the
+# paper's analysis of record kept -- "10 different drift voltages ranging
+# from 104 to 354 V" -- and the four dropped rows stay in the table with
+# their reason, rather than being deleted.
+#
+# This table has no acquisitions behind it in this repo: point
+# SCHAMP_EXAMPLE_RAW (or your own experiment.toml) at a directory holding
+# 130423_SJA_PALAN_1_001.raw .. _014.raw to run examples/polyalanine-walkthrough.ipynb
+# against the real series, or write your own conditions.csv in this shape for
+# a series of your own.
+acquisition,pressure_Torr,temperature_K,use,notes
+130423_SJA_PALAN_1_001.raw,2.03,301.13,false,dropped: one of the four lowest drift voltages
+130423_SJA_PALAN_1_002.raw,2.03,301.13,true,
+130423_SJA_PALAN_1_003.raw,2.03,301.13,true,
+130423_SJA_PALAN_1_004.raw,2.03,301.13,false,dropped: one of the four lowest drift voltages
+130423_SJA_PALAN_1_005.raw,2.031,301.13,true,
+130423_SJA_PALAN_1_006.raw,2.031,301.13,false,dropped: one of the four lowest drift voltages
+130423_SJA_PALAN_1_007.raw,2.031,301.13,true,
+130423_SJA_PALAN_1_008.raw,2.031,301.13,true,
+130423_SJA_PALAN_1_009.raw,2.031,301.13,false,dropped: one of the four lowest drift voltages
+130423_SJA_PALAN_1_010.raw,2.031,301.13,true,
+130423_SJA_PALAN_1_011.raw,2.031,301.13,true,
+130423_SJA_PALAN_1_012.raw,2.032,301.13,true,
+130423_SJA_PALAN_1_013.raw,2.032,301.13,true,
+130423_SJA_PALAN_1_014.raw,2.032,301.13,true,

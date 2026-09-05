@@ -19,9 +19,11 @@ Run:  uv run tools/check_public.py
 """
 
 import importlib
+import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -441,8 +443,6 @@ try:
     section("reporting conventions")
     written = schamp.report.write_results({"answer": 42}, work, task="check-public")
     check_true("write_results stamps and writes", os.path.isfile(written))
-    import json
-
     stamped = json.load(open(written, encoding="utf-8"))
     check_true(
         "the stamp carries the date, the version and the results",
@@ -1047,6 +1047,65 @@ try:
     check_true("a Waters license key resolves", bool(key))
 except schamp.sdk.ConfigError:
     skip("a Waters license key resolves", "none configured; tools/install_sdk.py")
+
+# --------------------------------------------------------------------------------
+section("the example notebook")
+NOTEBOOK = os.path.join(schamp.ROOT, "examples", "polyalanine-walkthrough.ipynb")
+if not os.path.isfile(NOTEBOOK):
+    check_true("examples/polyalanine-walkthrough.ipynb exists", False)
+else:
+    with open(NOTEBOOK, encoding="utf-8") as fh:
+        notebook_json = json.load(fh)
+    code_cells = [c for c in notebook_json.get("cells", []) if c.get("cell_type") == "code"]
+    check_true("the notebook has code cells", len(code_cells) > 0)
+    check_true(
+        "the shipped notebook carries no committed execution artefacts",
+        all(not c.get("outputs") and c.get("execution_count") is None for c in code_cells),
+    )
+
+    try:
+        importlib.import_module("nbformat")
+        importlib.import_module("nbclient")
+        have_dev = True
+    except ImportError:
+        have_dev = False
+        skip("the notebook executes end to end", "the dev dependency group is not installed")
+
+    if have_dev:
+        example_raw = os.environ.get("SCHAMP_EXAMPLE_RAW")
+        if not example_raw:
+            lab = schamp.lab_dir("legacy")
+            if lab and os.path.isdir(os.path.join(lab, "130423")):
+                example_raw = os.path.join(lab, "130423")
+        if not have_sdk:
+            skip("the notebook executes end to end", "Waters SDK not installed")
+        elif not example_raw:
+            skip(
+                "the notebook executes end to end",
+                "no polyalanine acquisitions; set SCHAMP_EXAMPLE_RAW or run from a lab "
+                "checkout that ships them",
+            )
+        else:
+            # A subprocess, not an in-process kernel: nbconvert's own CLI is what
+            # examples/README.md tells a user to run, so this is the same path
+            # being checked rather than a shortcut around it.
+            env = dict(os.environ, SCHAMP_EXAMPLE_RAW=example_raw)
+            executed = tempfile.mktemp(suffix=".ipynb")
+            try:
+                done = subprocess.run(
+                    [sys.executable, "-m", "jupyter", "nbconvert", "--to", "notebook",
+                     "--execute", "--output", executed, NOTEBOOK],
+                    capture_output=True, text=True, env=env, timeout=1800,
+                )
+                check_true(
+                    "the notebook executes end to end",
+                    done.returncode == 0 and os.path.isfile(executed),
+                )
+                if done.returncode != 0:
+                    print(done.stderr[-4000:])
+            finally:
+                if os.path.isfile(executed):
+                    os.remove(executed)
 
 # Reading a real acquisition needs a .raw, which no clone ships. Point SCHAMP_SMOKE_RAW at
 # one to have this open it and read a mobillogram; anything else skips.

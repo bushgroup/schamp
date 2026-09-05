@@ -25,3 +25,13 @@ packages = ["src/schamp"]
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+# Needed only to execute examples/*.ipynb -- tools/check_public.py checks for this group
+# rather than assuming it, and reports SKIPPED rather than FAIL when it is absent.
+dev = [
+    "ipykernel~=7.3.0",
+    "jupyter~=1.1.1",
+    "nbclient~=0.11.0",
+    "nbformat~=5.11.1",
+]
