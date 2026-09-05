@@ -10,7 +10,11 @@ collision cross section against m/z for all four ion series (1+, 2+, 1-, 2-).
 
 `data/npalan/conditions.csv` and `data/palan/conditions.csv` carry the series' pressures
 and temperatures, one row per acquisition -- the same shape `schamp.experiment` reads
-anywhere, and small enough to commit. **The acquisitions themselves are not here.** The
+anywhere, and small enough to commit. To fill one in for a series of your own, start
+from [`docs/acquiring-a-drift-voltage-series.md`](../docs/acquiring-a-drift-voltage-series.md),
+which covers the acquisition end of this workflow: the instrument state, choosing the
+drift voltages, and what to read off the manometer and the cell thermocouples while
+the series runs. **The acquisitions themselves are not here.** The
 series is two sets of 14 Waters `.raw` directories, about 5.4 GB, and this repository
 never ships one: `docs/README.md` and the top-level `CLAUDE.md` say why.
 

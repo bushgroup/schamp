@@ -99,6 +99,10 @@ check_true(
     "docs/ holds the 2016 SI",
     os.path.isfile(os.path.join(schamp.DOCS_DIR, "2016-allen-rf-confining-drift-cell-SI.pdf")),
 )
+check_true(
+    "docs/ holds the acquisition guide",
+    os.path.isfile(os.path.join(schamp.DOCS_DIR, "acquiring-a-drift-voltage-series.md")),
+)
 check_true("DATA_DIR ships with the package", os.path.isdir(schamp.DATA_DIR))
 
 # --------------------------------------------------------------------------------

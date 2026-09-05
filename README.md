@@ -27,6 +27,7 @@ original acquisitions.
 - Record the conditions the `.raw` file does not carry, i.e., pressure, temperature, and gas, in
   one conditions table per experiment.
 - Document how to acquire a drift-voltage series on an RF-confining drift cell instrument.
+  Written: [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md).
 
 ## Requirements
 
@@ -100,7 +101,8 @@ installs from its own download. Note that a `uv sync` following a Python version
 src/schamp/      the package; sdk.py opens licensed SDK readers on a .raw, the rest is a stub
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
                  check_public.py (the self-check)
-docs/            the 2016 Analyst paper and its supporting information, with an index
+docs/            the acquisition guide, the 2016 Analyst paper and its supporting
+                 information, with an index
 external/        the Waters SDK installed by install_sdk.py, and reference code fetched by
                  bootstrap.py and read in place, never imported or vendored
                  (not in this repository)

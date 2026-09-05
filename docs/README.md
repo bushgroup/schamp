@@ -1,4 +1,16 @@
-# Reference documents
+# Documentation and reference documents
+
+## Guides
+
+[`acquiring-a-drift-voltage-series.md`](acquiring-a-drift-voltage-series.md) is how to take the
+data this package analyzes: the instrument state a linear-field measurement requires, how to
+choose and step the drift voltages, what to calibrate so that an m/z window lands on its peak,
+what pressure, temperature, and gas have to be written down by hand because the `.raw` file does
+not record them, how they go into the conditions table, and the failure modes that make a series
+unusable. Read it before an acquisition, and read it alongside
+[`examples/README.md`](../examples/README.md), which is the analysis end of the same workflow.
+
+## Reference documents
 
 Both files are open access under the Creative Commons Attribution 3.0 Unported Licence, which is
 why they are tracked here rather than fetched. Cite the paper, not this copy.

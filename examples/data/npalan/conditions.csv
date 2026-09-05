@@ -4,18 +4,25 @@
 # No voltage column: every drift voltage comes from the acquisition's own
 # _extern.inf through the uw-synapt-g2 profile. Pressures are the MKS Baratron
 # 626B readings taken at the time of acquisition; nothing inside the .raw
-# records them. The temperature is the single value used throughout the
-# published analysis and carries no independently recorded provenance, which
-# is why it has no uncertainty here. `use` marks the ten acquisitions the
-# paper's analysis of record kept -- "10 different drift voltages ranging
-# from 104 to 354 V" -- and the four dropped rows stay in the table with
-# their reason, rather than being deleted.
+# records them. The temperature is the one value used throughout the
+# published analysis, the average of two T-type thermocouples on the cell
+# metal; docs/acquiring-a-drift-voltage-series.md describes the arrangement
+# and the roughly 1 K it is good for. There is deliberately no
+# temperature_K_err column: neither sensor was ever checked against a
+# reference, one reading covers all fourteen acquisitions, and nothing
+# further about this series is going to be established.
+#
+# `use` marks the ten acquisitions the paper's analysis of record kept --
+# "10 different drift voltages ranging from 104 to 354 V" -- and the four
+# dropped rows stay in the table with their reason, rather than being
+# deleted.
 #
 # This table has no acquisitions behind it in this repo: point
 # SCHAMP_EXAMPLE_RAW (or your own experiment.toml) at a directory holding
 # 130423_SJA_NPALAN_1_001.raw .. _014.raw to run examples/polyalanine-walkthrough.ipynb
 # against the real series, or write your own conditions.csv in this shape for
-# a series of your own.
+# a series of your own. docs/acquiring-a-drift-voltage-series.md is how to
+# acquire that series and what to record while you do.
 acquisition,pressure_Torr,temperature_K,use,notes
 130423_SJA_NPALAN_1_001.raw,2.026,301.13,false,dropped: one of the four lowest drift voltages
 130423_SJA_NPALAN_1_002.raw,2.026,301.13,true,
