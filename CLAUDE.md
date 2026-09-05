@@ -52,7 +52,7 @@ you are reading this file *without* that import, you have a public clone — the
   skill** from the lab repo. Repo-internal prose (this file, docstrings, commit messages) does not.
 - **BSD 3-Clause, `LICENSE`, copyright University of Washington** (lab record, task 09). It does
   not cover `docs/`, which is CC-BY 3.0, nor the Waters SDK, which is never redistributed here.
-  The go-public date is Matt's to set and is recorded in the lab repo.
+  This repository has been public since 2026-09-05; treat every commit as read by strangers.
 
 ## Maintaining this file
 
