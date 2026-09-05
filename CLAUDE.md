@@ -50,8 +50,9 @@ you are reading this file *without* that import, you have a public clone — the
 - **`.gitattributes` pins `* text=auto eol=lf`.**
 - **Outward-facing prose (README, `docs/`, `examples/`, user guides) follows the `manuscript-voice`
   skill** from the lab repo. Repo-internal prose (this file, docstrings, commit messages) does not.
-- **No license while private**; licensing and the go-public date are open decisions recorded in the
-  lab repo (task 09).
+- **BSD 3-Clause, `LICENSE`, copyright University of Washington** (lab record, task 09). It does
+  not cover `docs/`, which is CC-BY 3.0, nor the Waters SDK, which is never redistributed here.
+  The go-public date is Matt's to set and is recorded in the lab repo.
 
 ## Maintaining this file
 

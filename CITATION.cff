@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+title: schamp
+abstract: >-
+  Software and documentation for acquiring and analysing ion mobility mass
+  spectrometry data on Waters Synapt G2, G2-S, and G2-Si instruments in which
+  the traveling-wave ion mobility cell has been replaced by an RF-confining
+  drift cell.
+type: software
+message: >-
+  If you use schamp, please cite the paper below, which describes the
+  instrument and the measurements this software reproduces. Cite the software
+  itself alongside it if the analysis matters to your result.
+authors:
+  - family-names: Bush
+    given-names: Matthew F.
+    affiliation: University of Washington
+license: BSD-3-Clause
+repository-code: https://github.com/bushgroup/schamp
+keywords:
+  - ion mobility
+  - mass spectrometry
+  - collision cross section
+  - drift cell
+  - Waters Synapt
+preferred-citation:
+  type: article
+  title: >-
+    Ion mobility mass spectrometry of peptide, protein, and protein complex
+    ions using a radio-frequency confining drift cell
+  authors:
+    - family-names: Allen
+      given-names: Samuel J.
+    - family-names: Giles
+      given-names: Kevin
+    - family-names: Gilbert
+      given-names: Tony
+    - family-names: Bush
+      given-names: Matthew F.
+  journal: Analyst
+  year: 2016
+  volume: 141
+  issue: 3
+  start: 884
+  end: 891
+  doi: 10.1039/c5an02107c

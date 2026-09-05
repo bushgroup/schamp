@@ -3,6 +3,8 @@ name = "schamp"
 version = "0.1.0"
 description = "Acquire and analyze ion mobility mass spectrometry data from RF-confining drift cells on Waters Synapt instruments."
 requires-python = "==3.12.*"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 dependencies = [
     "numpy~=2.5.2",
     "scipy~=1.18.0",
