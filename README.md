@@ -11,26 +11,40 @@ Mason-Schamp equation, which converts a reduced mobility into a collision cross 
 
 ## Status
 
-The pipeline runs end to end, from a set of `.raw` acquisitions to collision cross sections, and
-it reproduces the polyalanine measurements in Figure 1 of the 2016 paper from the original
-acquisitions. The worked example in [`examples/`](examples/README.md) is that reproduction,
-figure and all. There is no tagged release yet, the API is still moving, and the development
-record that sequences the work lives in a private companion repository.
+The pipeline runs end to end, from a set of `.raw` acquisitions to collision cross sections in
+helium or nitrogen, and it reproduces the polyalanine measurements in Figure 1 of the 2016 paper
+from the original acquisitions. Against the published table, every ion series agrees to better
+than 0.6 % in the mean and the worst single ion is within 2 %. The worked example in
+[`examples/`](examples/README.md) is that reproduction, figure and all, and
+[`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md) is the
+guide to taking a series of your own.
+
+schamp is a library, and the notebook is the way in. There is no command-line interface and no
+graphical one, there is no tagged release, and the API is still moving. The development record
+that sequences the work lives in a private companion repository.
 
 ## What it does
 
 - Reads arrival-time distributions for chosen m/z windows directly from Waters `.raw`
   acquisitions through the vendor MassLynx SDK, replacing the `cdctest.exe` step of the original
   workflow.
-- Places each window on the ion's own measured peak, in the m/z frame the acquisition's own
-  calibration puts the mobility reader in, rather than on the m/z its formula predicts.
+- Places each window on the ion's own measured peak, three measured peak widths across, in the
+  m/z frame the acquisition's own calibration puts the mobility reader in, rather than on the m/z
+  its formula predicts. A fixed width in Th fails at one end of the mass range or the other,
+  because the peak width on these instruments changes sixfold between 230 and 1650 Th.
+- Reads the calibration each acquisition carries, i.e., which calibrant produced it and how old
+  it is, so that a mass error can be diagnosed before it is corrected. A mass recalibration is
+  opt-in, declared once per series in the experiment file, and is fitted from the species the
+  analysis is already placing windows on.
 - Fits each arrival-time distribution and reports its centroid, width, and fit quality.
 - Regresses drift time against reciprocal drift voltage across an acquisition series, then
-  reports mobility, reduced mobility, and collision cross section in helium or nitrogen with
-  propagated uncertainties, using a per-instrument profile for the drift-voltage definition and
-  cell length.
+  reports mobility, reduced mobility, and collision cross section with propagated uncertainties,
+  using a per-instrument profile for the drift-voltage definition and cell length. A cross
+  section is never reported without its gas, its charge state, and the pressure and temperature
+  it was reduced with.
 - Records the conditions the `.raw` file does not carry, i.e., pressure, temperature, and gas, in
-  one conditions table per experiment.
+  one conditions table per experiment, with the acquisitions excluded from a regression marked in
+  that table with their reason rather than dropped in code.
 - Documents how to acquire a drift-voltage series on an RF-confining drift cell instrument, in
   [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md).
 
@@ -107,15 +121,75 @@ redistribution. Everything the installer writes goes into `external/`, which is 
 installs from its own download. Note that a `uv sync` following a Python version change rebuilds
 `.venv/` and drops the import path entry. Rerun the installer with `--relink` to restore it.
 
+## Using it
+
+An analysis starts from two files that describe a series, an `experiment.toml` naming the
+instrument profile and the gas, and a `conditions.csv` beside it with one row per acquisition
+carrying the pressure and temperature that were written down by hand. The example's
+[`conditions.csv`](examples/data/palan/conditions.csv) is the template, and the notebook
+writes the matching `experiment.toml` in its first cells. From there the pipeline is four
+calls per acquisition and two per ion:
+
+```python
+import schamp
+from schamp import atd, calibration, extract, mobility, sdk
+
+experiment = schamp.load_experiment("my-series/experiment.toml")
+profile = experiment.profile
+assert not experiment.validate(require_raw=True)
+
+fits = {}
+for condition in experiment.used:
+    with sdk.open_readers(condition.path) as readers:
+        spectrum = extract.total_spectrum(readers)
+        frame = calibration.MzFrame.for_acquisition(condition.path)
+        window = extract.MzWindow.around_measured(mz, spectrum, frame=frame, label="1+ n=7")
+        fits[condition.acquisition] = atd.fit_gaussian(extract.extract_atd(readers, window))
+
+points = [
+    mobility.DriftPoint(
+        acquisition=c.acquisition,
+        v_drift_v=c.drift_voltage(profile),
+        drift_time_ms=fits[c.acquisition].centre_ms,
+        drift_time_ms_err=fits[c.acquisition].centre_ms_err,
+    )
+    for c in experiment.used
+]
+line = mobility.regress(points, profile)
+result = mobility.cross_section_from_regression(
+    line, profile, charge=1, ion_mass_da=mass_da, gas=experiment.gas,
+    pressure_torr=pressure_torr, temperature_k=temperature_k,
+)
+print(result.omega_a2, result.omega_a2_err, result.propagated)
+```
+
+Only the block under `sdk.open_readers` touches the Waters SDK. Everything else, including the
+profile, the experiment files, the Gaussian fit, the regression, and the Mason-Schamp conversion,
+runs on a machine with no SDK, no license, and no acquisition, which is what the self-check
+exercises. `result.propagated` names the uncertainty terms that went into the error bar, and for
+a series whose pressure and temperature were recorded without uncertainties it says so by naming
+the slope alone.
+
+schamp ships one instrument profile, `uw-synapt-g2`, the instrument of the 2016 paper. It carries
+the drift length, the resistor-ladder counts that fix the divider ratio, and the names of the
+`_extern.inf` keys that add up to the drift voltage, all of which differ between the copies of
+this cell now running on G2, G2-S, and G2-Si instruments. To use another instrument, copy
+[`uw-synapt-g2.toml`](src/schamp/data/profiles/uw-synapt-g2.toml), edit it, and load it by path.
+
 ## Layout
 
 ```
-src/schamp/      the package: extraction through sdk.py, then fitting, regression,
-                 cross sections, and the two config formats
+src/schamp/      the package. extract and sdk are the only modules that touch the
+                 Waters SDK; atd (the distribution and its fit), mobility (the
+                 regression and the cross section), profiles, experiment,
+                 calibration, spectrum, extern, constants, and report run without it
+src/schamp/data/ the shipped instrument profile
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
                  check_public.py (the self-check)
+tests/fixtures/  the sidecars one 2013 acquisition wrote, verbatim, for the self-check
 docs/            the acquisition guide, the 2016 Analyst paper and its supporting
                  information, with an index
+examples/        the polyalanine notebook and its two conditions tables
 external/        the Waters SDK installed by install_sdk.py, and reference code fetched by
                  bootstrap.py and read in place, never imported or vendored
                  (not in this repository)
@@ -127,6 +201,13 @@ The task history, working notes, exploration scripts, and the legacy analysis th
 modernizes live in a private companion repository. When it is present as a sibling checkout, or is
 named by the `SCHAMP_LAB` environment variable, `schamp.lab_dir()` resolves it; without it the
 package is fully functional.
+
+## Citing
+
+Cite the paper, which describes the instrument and the measurements this software reproduces:
+S. J. Allen, K. Giles, T. Gilbert, and M. F. Bush, *Analyst* 2016, **141**, 884, DOI
+10.1039/c5an02107c. [`CITATION.cff`](CITATION.cff) carries that reference and the software's own
+alongside it, for the case where the analysis matters to your result.
 
 ## License
 
