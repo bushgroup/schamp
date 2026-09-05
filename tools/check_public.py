@@ -530,12 +530,224 @@ check_true("a cross section prints its conditions", "helium" in str(xs) and "Tor
 check_close("K0 accompanies K", xs.reduced_mobility_cm2_v_s, C.reduce_mobility(4.2, 2.028, 301.13))
 
 # --------------------------------------------------------------------------------
+section("the drift-time regression")
+# The 2013 series' own fourteen drift voltages under the profile's formula, so that the
+# synthetic series has the abscissa spacing of a real one. Ten of them are the analysis
+# of record: the four lowest are dropped.
+SERIES_V = [86.9647, 302.4, 211.4824, 80.0471, 103.7647, 74.1176, 141.3176, 249.0353,
+            94.8706, 181.8353, 114.6353, 160.0941, 351.8118, 126.4941]
+KEPT_V = [v for v in SERIES_V if v >= 100.0]
+check_true("ten of the fourteen 2013 drift voltages are at 104 V and above", len(KEPT_V) == 10)
+
+
+def synthetic(k_cm2_v_s, t0_ms, voltages, noise=None, err=None):
+    """Eqn (3) forwards: a series that a correct regression must invert exactly."""
+    slope = 1000.0 * profile.drift_length_cm**2 / k_cm2_v_s
+    return [
+        schamp.mobility.DriftPoint(
+            f"synthetic_{i:03d}", v, t0_ms + slope / v + (0.0 if noise is None else noise[i]),
+            drift_time_ms_err=None if err is None else err[i],
+        )
+        for i, v in enumerate(voltages)
+    ]
+
+
+for k_true, t0_true in ((4.2, 0.55), (1.15, 0.31), (12.7, 0.48)):
+    line = schamp.mobility.regress(synthetic(k_true, t0_true, KEPT_V), profile)
+    check_close(
+        f"a noiseless series inverts to K = {k_true}",
+        schamp.mobility.mobility_from_slope(line.slope_ms_v, profile.drift_length_cm),
+        k_true,
+        rel=1e-12,
+    )
+    check_close(f"...and to t0 = {t0_true} ms", line.intercept_ms, t0_true, rel=1e-9)
+    check_true(f"...with R^2 = 1 at K = {k_true}", abs(line.r_squared - 1.0) < 1e-12)
+    check_true(
+        f"...and no residual at K = {k_true}",
+        line.rms_residual_ms < 1e-12 and line.slope_ms_v_err < 1e-6,
+    )
+
+# Errors that are Excel's, not a variant of them. A four-point series worked by hand:
+# x = 1, 2, 3, 4; y = 2, 4, 5, 8. Sxx = 5, Sxy = 9.5, Syy = 18.75, so SLOPE = 1.9 and
+# INTERCEPT = 0; the residuals are 0.1, 0.2, -0.7, 0.4 and SSE = 0.7, so LINEST's slope
+# error is sqrt((SSE/(n-2))/Sxx) = sqrt(0.07) and its R^2 is 1 - 0.7/18.75.
+hand = [schamp.mobility.DriftPoint(f"h{i}", 1.0 / x, y) for i, (x, y) in
+        enumerate(((1.0, 2.0), (2.0, 4.0), (3.0, 5.0), (4.0, 8.0)))]
+hand_line = schamp.mobility.regress(hand, profile)
+check_close("the slope is Excel's SLOPE", hand_line.slope_ms_v, 1.9, rel=1e-12)
+check_true("the intercept is Excel's INTERCEPT", abs(hand_line.intercept_ms) < 1e-12)
+check_close(
+    "the slope error is Excel's LINEST",
+    hand_line.slope_ms_v_err,
+    math.sqrt((0.7 / 2.0) / 5.0),
+    rel=1e-12,
+)
+check_close("R^2 is Excel's LINEST", hand_line.r_squared, 1.0 - 0.7 / 18.75, rel=1e-12)
+check_true("the fit counts its points", hand_line.n == 4 and hand_line.excluded == ())
+
+# A series with structure in the residuals, so the error bars are not all zero.
+wobble = [+2e-3, -1e-3, +3e-3, -2e-3, +1e-3, -3e-3, +2e-3, -1e-3, +1e-3, -2e-3]
+noisy = schamp.mobility.regress(synthetic(4.2, 0.55, KEPT_V, noise=wobble), profile)
+check_true("a noisy series has a positive slope error", noisy.slope_ms_v_err > 0.0)
+check_true("...and an intercept error", noisy.intercept_ms_err > 0.0)
+check_true("...and an R^2 below 1", 0.99 < noisy.r_squared < 1.0)
+check_true(
+    "...and an rms residual of the size that was put in",
+    1e-3 < noisy.rms_residual_ms < 3e-3,
+)
+
+# Excluding by name, which is how a subset travels with its result.
+full = synthetic(4.2, 0.55, SERIES_V)
+subset = schamp.mobility.regress(
+    full, profile, exclude=[p.acquisition for p, v in zip(full, SERIES_V) if v < 100.0]
+)
+check_true("an excluded acquisition is dropped and recorded",
+           subset.n == 10 and len(subset.excluded) == 4)
+check_close(
+    "...and the fit is the same line on a noiseless series",
+    subset.slope_ms_v,
+    schamp.mobility.regress(full, profile).slope_ms_v,
+    rel=1e-9,
+)
+
+# Weighting: equal weights must reproduce the unweighted fit exactly.
+equal = synthetic(4.2, 0.55, KEPT_V, noise=wobble, err=[2.5e-3] * 10)
+check_close(
+    "equal weights give the unweighted slope",
+    schamp.mobility.regress(equal, profile, weighted=True).slope_ms_v,
+    schamp.mobility.regress(equal, profile).slope_ms_v,
+    rel=1e-12,
+)
+check_true(
+    "a weighted fit says it was weighted",
+    schamp.mobility.regress(equal, profile, weighted=True).weighted,
+)
+check_raises(
+    "a weighted fit without centroid errors is refused",
+    ValueError,
+    lambda: schamp.mobility.regress(synthetic(4.2, 0.55, KEPT_V), profile, weighted=True),
+)
+check_raises(
+    "fewer than three acquisitions is refused",
+    ValueError,
+    lambda: schamp.mobility.regress(synthetic(4.2, 0.55, KEPT_V[:2]), profile),
+)
+check_raises(
+    "two acquisitions at one drift voltage are refused",
+    ValueError,
+    lambda: schamp.mobility.regress(
+        synthetic(4.2, 0.55, [104.0, 104.0, 200.0, 300.0]), profile
+    ),
+)
+
+# --------------------------------------------------------------------------------
+section("regression to cross section, and what the error bar covers")
+for gas_name, z, mass, k0_true in (("helium", 1, 232.13, 4.60), ("helium", 2, 1580.8, 1.55),
+                                   ("nitrogen", 1, 1509.8, 1.10), ("nitrogen", 2, 1580.8, 0.72)):
+    p_torr, t_k = (2.028, 301.13) if gas_name == "helium" else (1.5, 298.0)
+    k_true = C.unreduce_mobility(k0_true, p_torr, t_k)
+    line = schamp.mobility.regress(synthetic(k_true, 0.5, KEPT_V, noise=wobble), profile)
+    got = schamp.mobility.cross_section_from_regression(
+        line, profile, charge=z, ion_mass_da=mass, gas=gas_name,
+        pressure_torr=p_torr, temperature_k=t_k,
+    )
+    check_close(
+        f"the {gas_name} chain reaches eqn (4) at z={z}",
+        got.omega_a2,
+        C.ccs_from_reduced_mobility(
+            got.reduced_mobility_cm2_v_s, charge=z, ion_mass_da=mass,
+            gas_mass_da=C.gas(gas_name).mass_da, temperature_k=t_k,
+        ),
+        rel=1e-12,
+    )
+    check_true(f"...and carries its gas ({gas_name})", got.gas == gas_name)
+
+line = schamp.mobility.regress(synthetic(4.2, 0.5, KEPT_V, noise=wobble), profile)
+slope_only = schamp.mobility.cross_section_from_regression(
+    line, profile, charge=1, ion_mass_da=232.13, gas="helium",
+    pressure_torr=2.028, temperature_k=301.13,
+)
+check_true("the slope alone is the default error bar", slope_only.propagated == ("slope",))
+check_close(
+    "...and it is the slope's own relative error",
+    slope_only.omega_a2_err / slope_only.omega_a2,
+    line.slope_ms_v_err / line.slope_ms_v,
+    rel=1e-12,
+)
+with_pt = schamp.mobility.cross_section_from_regression(
+    line, profile, charge=1, ion_mass_da=232.13, gas="helium",
+    pressure_torr=2.028, temperature_k=301.13,
+    pressure_torr_err=0.005, temperature_k_err=2.0,
+)
+check_true(
+    "P and T are named when they are supplied",
+    with_pt.propagated == ("slope", "pressure", "temperature"),
+)
+check_close(
+    "...and add in quadrature over the logarithmic derivatives",
+    with_pt.omega_a2_err / with_pt.omega_a2,
+    math.sqrt(
+        (line.slope_ms_v_err / line.slope_ms_v) ** 2
+        + (0.005 / 2.028) ** 2
+        + (0.5 * 2.0 / 301.13) ** 2
+    ),
+    rel=1e-12,
+)
+check_true(
+    "...and the bar is wider than the slope alone",
+    with_pt.omega_a2_err > slope_only.omega_a2_err,
+)
+check_close(
+    "the cross section itself does not move when errors are added",
+    with_pt.omega_a2, slope_only.omega_a2, rel=1e-15,
+)
+# The drift length enters squared, and only when the profile says how well it is known.
+import dataclasses as _dc  # noqa: PLC0415 -- stdlib, only this check needs it
+
+measured_l = _dc.replace(profile, drift_length_cm_err=0.05)
+with_l = schamp.mobility.cross_section_from_regression(
+    line, measured_l, charge=1, ion_mass_da=232.13, gas="helium",
+    pressure_torr=2.028, temperature_k=301.13,
+)
+check_true("a profile with a length error propagates it",
+           with_l.propagated == ("slope", "drift_length"))
+check_close(
+    "...at twice its relative size, because the slope goes as L^2",
+    with_l.omega_a2_err / with_l.omega_a2,
+    math.sqrt(
+        (line.slope_ms_v_err / line.slope_ms_v) ** 2 + (2.0 * 0.05 / 25.05) ** 2
+    ),
+    rel=1e-12,
+)
+check_true(
+    "the shipped profile claims no length uncertainty, so none is invented",
+    profile.drift_length_cm_err is None and slope_only.propagated == ("slope",),
+)
+
+# The whole chain, closed: a cross section put in comes back out.
+for gas_name, z, mass, omega_true in (("helium", 1, 232.13, 88.0),
+                                      ("nitrogen", 2, 1580.8, 422.0)):
+    p_torr, t_k = (2.028, 301.13) if gas_name == "helium" else (1.5, 298.0)
+    k_true = C.mobility_from_ccs(
+        omega_true, charge=z, ion_mass_da=mass, gas_mass_da=C.gas(gas_name).mass_da,
+        pressure_torr=p_torr, temperature_k=t_k,
+    )
+    line = schamp.mobility.regress(synthetic(k_true, 0.5, KEPT_V), profile)
+    got = schamp.mobility.cross_section_from_regression(
+        line, profile, charge=z, ion_mass_da=mass, gas=gas_name,
+        pressure_torr=p_torr, temperature_k=t_k,
+    )
+    check_close(
+        f"{omega_true} A^2 in {gas_name} at z={z} round trips through the whole chain",
+        got.omega_a2, omega_true, rel=1e-12,
+    )
+
+# --------------------------------------------------------------------------------
 section("the layers that are not built yet")
-# A stub that returned something plausible would be far worse than one that raises.
-for name, call in (
-    ("mobility.regress", lambda: schamp.mobility.regress([], profile)),
-):
-    check_raises(f"{name} is honestly unimplemented", NotImplementedError, call)
+# Every layer is implemented. This section stays because the next unbuilt one belongs
+# in it: a stub that returned something plausible would be far worse than one that
+# raises, and this is where that is asserted.
+check_true("every pipeline layer is implemented", True)
 
 # --------------------------------------------------------------------------------
 section("lab resolution (must work with and without the lab repo)")

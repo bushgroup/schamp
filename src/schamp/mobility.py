@@ -18,16 +18,40 @@ analyser. `t_0` is a fitted nuisance parameter and is reported, because a value 
 from the expected few hundred microseconds is the clearest sign that something is
 wrong with a series.
 
-The regression itself is task 06. What is implemented here is the closed-form step
-either side of it -- slope to mobility, mobility to cross section -- and the object
-that carries a cross section, which exists to enforce one rule: **a cross section is
+The whole chain lives here: `regress` fits the line, `mobility_from_slope` inverts
+its slope, and `cross_section_from_regression` carries the result through eqn (4) to a
+`CrossSection` -- the object that exists to enforce one rule: **a cross section is
 never quoted without its gas, its charge state, and the pressure and temperature it
 was reduced with.** `CrossSection` cannot be constructed without all four.
+
+What the error bar covers
+-------------------------
+
+Eqn (4) is a product of powers, so every uncertainty enters as a relative one and the
+whole propagation is four logarithmic derivatives:
+
+    Omega  ~  slope^1 . L^-2 . P^-1 . T^+1/2
+
+The slope term is `L^2 / K`, so a fractional error on the slope is a fractional error
+on Omega, one for one. `L` enters squared. `P` and `T` enter through the number
+density `N = P / (k_B T)` and, for `T`, again through the square root of eqn (4) --
+`T^-1 . T^-1/2` from N and the root gives `T^+1/2` once the `1/K` is written out.
+`cross_section_from_regression` combines whichever of the four the caller supplies in
+quadrature and records their names in `CrossSection.propagated`, because an error bar
+whose contents are not written down is not a measurement of anything.
+
+The 2013 workbooks propagated the slope alone, and the conditions table makes the
+other three optional and reserved rather than required (lab record, task 03): the
+2013 series has a temperature with no recorded provenance at all, so demanding a
+`temperature_K_err` would block the very experiment this package was written to
+reproduce. Supply what you measured; the error bar then says what it covers.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from typing import Sequence
 
 from . import constants
 from .profiles import InstrumentProfile
@@ -37,6 +61,7 @@ __all__ = [
     "DriftPoint",
     "Regression",
     "cross_section",
+    "cross_section_from_regression",
     "mobility_from_slope",
     "regress",
 ]
@@ -74,11 +99,21 @@ class Regression:
     """A straight-line fit of arrival time against reciprocal drift voltage.
 
     `slope_ms_v` is in ms V, the units of `t_D` against `1/V`, and `intercept_ms` is
-    `t_0`. The errors are the standard errors of the fit -- and are the *only*
-    uncertainty the legacy analysis had, propagated onto the cross section as a pure
-    relative error with nothing from P, T or L. Where the conditions table supplies
-    uncertainties for those, task 06 propagates them too; where it does not, this is
-    what a cross section's error bar means, and `CrossSection.propagated` says so.
+    `t_0`. The errors are the standard errors of the fit, on Excel's `LINEST`
+    convention -- the residual variance carries `n - 2` degrees of freedom -- so a
+    series regressed here and the same series regressed in a spreadsheet agree to
+    double precision, which is what makes the 2013 workbooks checkable at all.
+
+    The fit error is the *only* uncertainty the legacy analysis had.
+    `cross_section_from_regression` propagates P, T and L alongside it when the
+    conditions table and the profile supply them, and `CrossSection.propagated` names
+    whichever of the four actually went in.
+
+    `excluded` records the acquisitions that were dropped before the fit, so the
+    subset a number came from travels with the number. `rms_residual_ms` is the root
+    mean square of the residuals in milliseconds: a series whose points lie on eqn (3)
+    leaves residuals at the level of the centroid uncertainty, and one that does not
+    is the first thing to look at.
     """
 
     slope_ms_v: float
@@ -88,6 +123,8 @@ class Regression:
     r_squared: float
     n: int
     excluded: tuple[str, ...] = ()
+    rms_residual_ms: float = 0.0
+    weighted: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,18 +226,178 @@ def cross_section(
     )
 
 
-def regress(points: list[DriftPoint], profile: InstrumentProfile) -> Regression:
+def regress(
+    points: Sequence[DriftPoint],
+    profile: InstrumentProfile,
+    *,
+    exclude: Sequence[str] = (),
+    weighted: bool = False,
+) -> Regression:
     """Least-squares fit of eqn (3) over a drift-voltage series.
 
-    Not implemented: task 06, which also owns the uncertainty propagation and the
-    reproduction of the legacy workbooks. The signature and `Regression` are fixed now.
+    Arrival time in milliseconds against reciprocal drift voltage, giving a slope of
+    `L^2 / K` in ms V and an intercept of `t_0` in ms. The standard errors follow
+    Excel's `LINEST`: the residual sum of squares over `n - 2` degrees of freedom,
+    divided by the spread of the abscissa. That convention is deliberate, and is what
+    lets a 2013 spreadsheet and this function be compared digit for digit rather than
+    approximately.
 
-    `profile` is taken here rather than only at the mobility step because a series is
-    only meaningful against the instrument it was measured on, and because task 06
-    weighs whether to weight the fit -- which needs the profile's view of what varies
-    between acquisitions.
+    `exclude` names acquisitions to leave out, and they are recorded on the result. A
+    drift-voltage series is routinely fitted over a subset -- the 2013 polyalanine
+    analysis of record kept ten of fourteen acquisitions, dropping the four lowest
+    voltages -- and the thing that analysis did not do was write down which. Prefer
+    `use = false` in the conditions table, which keeps the reason with the exclusion;
+    this argument is for the case where the subset is being varied deliberately.
+
+    `weighted` fits with `1 / sigma^2` weights from each point's `drift_time_ms_err`,
+    and needs every point to carry one. It is off by default, and the default is not
+    laziness: those sigmas are the formal errors of a single-Gaussian fit to an
+    arrival-time distribution that is not quite Gaussian, so they measure how tightly
+    the wrong model was determined rather than how well the centroid is known. Across
+    the ten acquisitions of one 2013 regression they span a factor of 3.2 at the median,
+    and weighting by them moves a cross section by 0.3 % on average and 1.7 % at worst
+    with no improvement in R^2 to show for it (lab record, task 06).
+    Weighting is here for series whose centroid errors are trustworthy; unweighted is
+    what the workbooks did, and what reproduces them.
+
+    `profile` is required because a drift-voltage series is only meaningful against the
+    instrument it was measured on: the voltages in `points` came from this profile's
+    formula, and the mobility that comes out of the slope will use this profile's drift
+    length. The line fit itself needs nothing more from it, so what it does here is
+    check the series -- enough points to have a residual, and no two acquisitions
+    sitting at the same drift voltage, which is the signature of a conditions table
+    that was copied rather than filled in.
     """
-    raise NotImplementedError(
-        "the drift-time regression is task 06; mobility_from_slope and cross_section "
-        "work today"
+    dropped = tuple(exclude)
+    kept = [point for point in points if point.acquisition not in set(dropped)]
+
+    if len(kept) < 3:
+        raise ValueError(
+            "a drift-time regression needs at least 3 acquisitions to have any "
+            f"residual to speak of; got {len(kept)}"
+            + (f" after excluding {', '.join(dropped)}" if dropped else "")
+        )
+
+    seen: dict[float, str] = {}
+    for point in kept:
+        clash = seen.get(point.v_drift_v)
+        if clash is not None:
+            raise ValueError(
+                f"{point.acquisition} and {clash} are both at {point.v_drift_v} V on "
+                f"{profile.name}; a drift-voltage series must step the drift voltage"
+            )
+        seen[point.v_drift_v] = point.acquisition
+
+    xs = [point.inverse_v for point in kept]
+    ys = [point.drift_time_ms for point in kept]
+
+    if weighted:
+        missing = [point.acquisition for point in kept if not point.drift_time_ms_err]
+        if missing:
+            raise ValueError(
+                "a weighted fit needs a drift_time_ms_err on every point; "
+                f"{len(missing)} lack one, starting with {missing[0]}"
+            )
+        weights = [1.0 / float(point.drift_time_ms_err) ** 2 for point in kept]  # type: ignore[arg-type]
+    else:
+        weights = [1.0] * len(kept)
+
+    n = len(kept)
+    w_sum = math.fsum(weights)
+    x_bar = math.fsum(w * x for w, x in zip(weights, xs)) / w_sum
+    y_bar = math.fsum(w * y for w, y in zip(weights, ys)) / w_sum
+    s_xx = math.fsum(w * (x - x_bar) ** 2 for w, x in zip(weights, xs))
+    if s_xx <= 0.0:
+        raise ValueError(
+            "every acquisition is at the same drift voltage, so there is no line to fit"
+        )
+    s_xy = math.fsum(w * (x - x_bar) * (y - y_bar) for w, x, y in zip(weights, xs, ys))
+    s_yy = math.fsum(w * (y - y_bar) ** 2 for w, y in zip(weights, ys))
+
+    slope = s_xy / s_xx
+    intercept = y_bar - slope * x_bar
+
+    residuals = [y - (intercept + slope * x) for x, y in zip(xs, ys)]
+    sse = math.fsum(w * r * r for w, r in zip(weights, residuals))
+    # LINEST's convention: the residual variance over n - 2 degrees of freedom. In a
+    # weighted fit this scales the errors by the reduced chi-square, so that
+    # `slope_ms_v_err` keeps one meaning -- the standard error of the fitted line --
+    # in both modes.
+    variance = sse / (n - 2)
+    slope_err = math.sqrt(variance / s_xx)
+    intercept_err = math.sqrt(variance * (1.0 / w_sum + x_bar**2 / s_xx))
+    r_squared = 1.0 if s_yy <= 0.0 else max(0.0, 1.0 - sse / s_yy)
+
+    return Regression(
+        slope_ms_v=slope,
+        slope_ms_v_err=slope_err,
+        intercept_ms=intercept,
+        intercept_ms_err=intercept_err,
+        r_squared=r_squared,
+        n=n,
+        excluded=dropped,
+        rms_residual_ms=math.sqrt(math.fsum(r * r for r in residuals) / n),
+        weighted=weighted,
+    )
+
+
+def cross_section_from_regression(
+    regression: Regression,
+    profile: InstrumentProfile,
+    *,
+    charge: int,
+    ion_mass_da: float,
+    gas: str,
+    pressure_torr: float,
+    temperature_k: float,
+    pressure_torr_err: float | None = None,
+    temperature_k_err: float | None = None,
+) -> CrossSection:
+    """The whole chain: a fitted line, plus conditions, to a cross section.
+
+    `K = L^2 / slope` with `L` from `profile`, then eqn (4) at `pressure_torr` and
+    `temperature_k`, then the uncertainty. This is the function analysis code calls;
+    `mobility_from_slope` and `cross_section` are its two halves, kept separate so
+    that either can be used alone.
+
+    Uncertainties are optional one at a time. Whatever is supplied is combined in
+    quadrature over the logarithmic derivatives of
+    `Omega ~ slope . L^-2 . P^-1 . T^+1/2`, and `CrossSection.propagated` comes back
+    naming exactly the terms that went in:
+
+    * ``slope`` -- always, from `regression.slope_ms_v_err`.
+    * ``drift_length`` -- when the profile carries a `drift_length_cm_err`, at twice
+      its relative size, because eqn (3)'s slope goes as `L^2`.
+    * ``pressure``, ``temperature`` -- when the conditions table supplies them.
+
+    On the 2013 series only ``slope`` is available, and that is the honest answer for
+    it: the pressure was read off a manometer's front panel and the temperature has no
+    recorded provenance whatever, so a bar claiming to include them would be an
+    invention. Naming the terms is what lets a series measured properly get a wider
+    and truer bar without the format or this function changing.
+    """
+    mobility = mobility_from_slope(regression.slope_ms_v, profile.drift_length_cm)
+
+    terms = ["slope"]
+    variance = (regression.slope_ms_v_err / regression.slope_ms_v) ** 2
+
+    if profile.drift_length_cm_err:
+        terms.append("drift_length")
+        variance += (2.0 * profile.drift_length_cm_err / profile.drift_length_cm) ** 2
+    if pressure_torr_err:
+        terms.append("pressure")
+        variance += (pressure_torr_err / pressure_torr) ** 2
+    if temperature_k_err:
+        terms.append("temperature")
+        variance += (0.5 * temperature_k_err / temperature_k) ** 2
+
+    return cross_section(
+        mobility,
+        charge=charge,
+        ion_mass_da=ion_mass_da,
+        gas=gas,
+        pressure_torr=pressure_torr,
+        temperature_k=temperature_k,
+        relative_err=math.sqrt(variance),
+        propagated=tuple(terms),
     )
