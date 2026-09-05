@@ -31,6 +31,17 @@ CSV and are the right place to say where a pressure came from.
     [defaults]                      # optional; fills any column a row leaves empty
     temperature_K = 301.13
 
+    [recalibration]                 # optional; absent means no mass correction at all
+    order = 1                       # in sqrt(m/z); 1 unless a fit says otherwise
+    min_apex = 2.0e4                # a peak below this is not a reference
+    # species = [ { mz = 392.7148, label = "CsI 1+ n=1" }, ... ]
+    # calibrant = "calibrant.raw"
+
+A recalibration belongs to the **series**, not to a row, which is why it is a table
+here and not a column there: fourteen fits and one shared fit place a species within
+0.22 and 0.29 of its window's half-width respectively, against 3.6 for no fit at all.
+`RecalibrationSpec` has the whole of it.
+
 `conditions.csv`
 ----------------
 
@@ -71,6 +82,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Mapping
 
 from . import constants
+from .calibration import CalibrationProvenance
 from .extern import EXTERN_FILENAME, parse_extern_inf
 from .profiles import InstrumentProfile, ProfileError, load_profile
 
@@ -80,6 +92,8 @@ __all__ = [
     "EXPERIMENT_FILENAME",
     "Experiment",
     "ExperimentError",
+    "RECALIBRATION_KEYS",
+    "RecalibrationSpec",
     "load_experiment",
 ]
 
@@ -102,6 +116,15 @@ CONDITIONS_COLUMNS = (
 )
 """The canonical column names. `extern:<key>` columns are additionally accepted."""
 
+RECALIBRATION_KEYS = (
+    "order",
+    "species",
+    "calibrant",
+    "min_apex",
+    "allow_polarity_mismatch",
+)
+"""The keys `[recalibration]` takes. Anything else is an error, as for a CSV column."""
+
 _TRUE = {"1", "true", "t", "yes", "y", "x"}
 _FALSE = {"0", "false", "f", "no", "n"}
 
@@ -115,6 +138,67 @@ class ExperimentError(Exception):
     voltage) come back from `Experiment.validate` as a list, so that a session sees
     all of them at once instead of one per run.
     """
+
+
+@dataclass(frozen=True)
+class RecalibrationSpec:
+    """How this experiment's mass recalibration is to be fitted, if it is to be at all.
+
+    A property of the **experiment**, not of a row, and that is a measurement rather
+    than a preference (lab record, task 11). Fitting one recalibration per acquisition
+    and one shared by a whole drift-voltage series were compared on two fourteen-point
+    series: the shared fit placed every species inside 0.29 of the half-width of the
+    window it went into, against 0.22 for the per-acquisition fits, while an
+    uncorrected placement reached 3.6 half-widths and put most species outside their
+    windows altogether. The difference between one fit and fourteen is a fifteenth of
+    the difference either makes, so a series takes one, in `[recalibration]`.
+
+    Nothing here is applied on its own. `load_experiment` reads and checks it; the
+    analysis builds the `calibration.MzFrame` from it when it has a total spectrum in
+    hand, because measuring where a species is needs one and reading one needs the SDK.
+
+        [recalibration]
+        order = 1
+        min_apex = 2.0e4
+        species = [
+            { mz = 392.7148, label = "CsI 1+ n=1" },
+            { mz = 652.5248, label = "CsI 1+ n=2" },
+        ]
+
+    `species` is the reference list, and **leaving it out is the ordinary case**: the
+    fit is then made from the species the analysis is already placing windows on, which
+    is the anchor that needs nothing from the analyst and the one that measured best.
+    Give a list where the analyte's own assignment is what is in doubt, or where the
+    reference ions are not the ones being analysed.
+
+    `calibrant` is a separate acquisition -- a calibrant run -- whose path resolves
+    under `data_dir` like any other. Naming one means the analyte acquisitions borrow
+    that file's **whole** frame, its calibration function included, which is what
+    `calibration.MzFrame.from_calibrant` does and why it exists; a calibrant's fitted
+    residual on its own corrects nothing. A calibrant of the other polarity is refused
+    there unless `allow_polarity_mismatch` says otherwise, because that was measured
+    too and it does not work.
+    """
+
+    order: int = 1
+    species: tuple[tuple[float, str], ...] = ()
+    calibrant: str | None = None
+    calibrant_path: str | None = None
+    min_apex: float = 0.0
+    allow_polarity_mismatch: bool = False
+
+    def describe(self) -> str:
+        """One line for the record."""
+        anchor = (
+            f"a calibrant acquisition ({self.calibrant})"
+            if self.calibrant
+            else "the species the analysis places windows on"
+        )
+        reference = f"{len(self.species)} named species" if self.species else anchor
+        return (
+            f"recalibration: order {self.order} in sqrt(m/z), fitted from {reference}"
+            + (f", anchored on {anchor}" if self.species and self.calibrant else "")
+        )
 
 
 @dataclass(frozen=True)
@@ -179,6 +263,15 @@ class Experiment:
     conditions: tuple[Conditions, ...]
     conditions_source: str
     notes: str = ""
+    recalibration: RecalibrationSpec | None = None
+    """The experiment's `[recalibration]`, or None for the default: no mass correction.
+
+    None is not "not decided". It is the decision of record (lab record, task 10): the
+    acquisition's own calibration function always applies and is exact, and inventing a
+    mass correction on top of it that the analyst did not ask for is not extraction's
+    business. `calibration.CalibrationProvenance.concerns` is how an acquisition says
+    whether one is likely to be needed.
+    """
 
     @property
     def used(self) -> tuple[Conditions, ...]:
@@ -240,6 +333,52 @@ class Experiment:
             )
         if require_raw and len(used) >= 2:
             problems.extend(self._check_voltages(used))
+        if require_raw and self.recalibration is not None:
+            problems.extend(self._check_recalibration(self.recalibration))
+        return problems
+
+    def _check_recalibration(self, spec: RecalibrationSpec) -> list[str]:
+        """The calibrant is where it says it is, and is a file this could be borrowed from.
+
+        Only the calibrant is checkable without reading a spectrum: whether the named
+        species have peaks is a measurement, and this method makes none.
+        """
+        problems: list[str] = []
+        if spec.calibrant_path is None:
+            return problems
+        where = f"{self.source} [recalibration]"
+        if not os.path.isdir(spec.calibrant_path):
+            problems.append(
+                f"{where}: calibrant {spec.calibrant_path} is not a directory. A Waters "
+                ".raw acquisition is a directory of binary files, not a single file."
+            )
+            return problems
+        if not spec.species:
+            problems.append(
+                f"{where}: a calibrant is named but no species are, so there is nothing "
+                "to fit from it. List the calibrant's own reference ions under 'species'."
+            )
+        calibrant = CalibrationProvenance.from_raw(spec.calibrant_path)
+        for concern in calibrant.concerns():
+            problems.append(f"{where}: the calibrant {spec.calibrant} is itself suspect -- {concern}")
+        polarities = {
+            row.acquisition: CalibrationProvenance.from_raw(row.path).polarity
+            for row in self.used
+            if os.path.isdir(row.path)
+        }
+        mismatched = sorted(
+            name
+            for name, polarity in polarities.items()
+            if polarity and calibrant.polarity and polarity != calibrant.polarity
+        )
+        if mismatched and not spec.allow_polarity_mismatch:
+            problems.append(
+                f"{where}: the calibrant {spec.calibrant} was acquired "
+                f"{calibrant.polarity} and {len(mismatched)} acquisition(s) were not "
+                f"({', '.join(mismatched[:3])}{', ...' if len(mismatched) > 3 else ''}). "
+                "Carrying a calibration across polarity was measured to leave species "
+                "outside their windows; acquire a calibrant in each polarity."
+            )
         return problems
 
     def _check_acquisition(self, row: Conditions, where: str) -> list[str]:
@@ -408,6 +547,106 @@ def _read_conditions(
     return tuple(rows)
 
 
+def _read_recalibration(block, source: str, data_dir: str) -> RecalibrationSpec | None:
+    """`[recalibration]` from an `experiment.toml` table, or None if it has none.
+
+    Strict about its keys for the same reason the conditions table is: a mistyped
+    `min_apax` would otherwise be an experiment whose reference species are fitted from
+    the baseline, with no complaint about it.
+    """
+    if block is None:
+        return None
+    if not isinstance(block, dict):
+        raise ExperimentError(f"{source}: [recalibration] must be a table")
+    unknown = [key for key in block if key not in RECALIBRATION_KEYS]
+    if unknown:
+        raise ExperimentError(
+            f"{source}: [recalibration] has no key(s) {', '.join(repr(u) for u in unknown)}; "
+            f"one of {', '.join(RECALIBRATION_KEYS)}"
+        )
+
+    order = block.get("order", 1)
+    if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+        raise ExperimentError(
+            f"{source}: [recalibration] order must be a whole number 1 or more; got {order!r}"
+        )
+
+    species: list[tuple[float, str]] = []
+    raw_species = block.get("species", [])
+    if not isinstance(raw_species, list):
+        raise ExperimentError(
+            f"{source}: [recalibration] species must be a list of tables, each with an "
+            "'mz' and optionally a 'label'"
+        )
+    for index, entry in enumerate(raw_species, start=1):
+        if not isinstance(entry, dict) or "mz" not in entry:
+            raise ExperimentError(
+                f"{source}: [recalibration] species {index} is {entry!r}; each needs an "
+                "'mz' and may have a 'label'"
+            )
+        extra = set(entry) - {"mz", "label"}
+        if extra:
+            raise ExperimentError(
+                f"{source}: [recalibration] species {index} has no key(s) "
+                f"{', '.join(repr(e) for e in sorted(extra))}; only 'mz' and 'label'"
+            )
+        try:
+            mz = float(entry["mz"])
+        except (TypeError, ValueError) as exc:
+            raise ExperimentError(
+                f"{source}: [recalibration] species {index} has mz {entry['mz']!r}, "
+                "which is not a number"
+            ) from exc
+        if not mz > 0.0:
+            raise ExperimentError(
+                f"{source}: [recalibration] species {index} has mz {mz}; an m/z is positive"
+            )
+        species.append((mz, str(entry.get("label") or "")))
+    if species and len(species) < order + 2:
+        raise ExperimentError(
+            f"{source}: [recalibration] names {len(species)} species for an order-{order} "
+            f"fit, which needs at least {order + 2} to leave a residual worth reading"
+        )
+
+    calibrant = block.get("calibrant")
+    calibrant_path = None
+    if calibrant is not None:
+        calibrant = str(calibrant)
+        calibrant_path = os.path.abspath(os.path.join(data_dir, calibrant))
+
+    min_apex = block.get("min_apex", 0.0)
+    try:
+        min_apex = float(min_apex)
+    except (TypeError, ValueError) as exc:
+        raise ExperimentError(
+            f"{source}: [recalibration] min_apex is {min_apex!r}, which is not a number"
+        ) from exc
+    if min_apex < 0.0:
+        raise ExperimentError(
+            f"{source}: [recalibration] min_apex is {min_apex}; an intensity floor is not negative"
+        )
+
+    mismatch = block.get("allow_polarity_mismatch", False)
+    if not isinstance(mismatch, bool):
+        raise ExperimentError(
+            f"{source}: [recalibration] allow_polarity_mismatch is {mismatch!r}; it is true or false"
+        )
+    if mismatch and calibrant is None:
+        raise ExperimentError(
+            f"{source}: [recalibration] sets allow_polarity_mismatch with no calibrant to "
+            "mismatch; the polarity check only applies to a borrowed calibrant frame"
+        )
+
+    return RecalibrationSpec(
+        order=order,
+        species=tuple(species),
+        calibrant=calibrant,
+        calibrant_path=calibrant_path,
+        min_apex=min_apex,
+        allow_polarity_mismatch=mismatch,
+    )
+
+
 def load_experiment(path: str | os.PathLike[str]) -> Experiment:
     """Load an experiment from its `experiment.toml`, or from the directory holding one.
 
@@ -471,6 +710,7 @@ def load_experiment(path: str | os.PathLike[str]) -> Experiment:
     data_dir = os.path.abspath(os.path.join(root, str(table.get("data_dir") or ".")))
 
     return Experiment(
+        recalibration=_read_recalibration(table.get("recalibration"), target, data_dir),
         root=root,
         source=os.path.abspath(target),
         title=str(table.get("title") or os.path.basename(root)),

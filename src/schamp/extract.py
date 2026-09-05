@@ -241,7 +241,7 @@ class MzWindow:
             charge=charge,
             ion_mass_da=ion_mass_da,
             computed_mz=float(mz),
-            frame_note=frame.describe() if frame is not None else "",
+            frame_note=frame.note_for(mz) if frame is not None else "",
         )
 
     @classmethod
@@ -324,7 +324,7 @@ class MzWindow:
             low = float(frame.cal.to_chromatogram_frame(low))
             high = float(frame.cal.to_chromatogram_frame(high))
         note = (
-            f"{frame.describe() if frame is not None else 'no frame applied'}; "
+            f"{frame.note_for(mz) if frame is not None else 'no frame applied'}; "
             f"centred on a measured peak at {peak.mz:.4f} Th, width {widths:g} x "
             f"{peak.fwhm:.4f} Th FWHM"
         )

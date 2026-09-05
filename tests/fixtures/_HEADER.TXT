@@ -1,7 +1,10 @@
 $$ Version: 01.00
 $$ Acquired Name: SYNTHETIC
 $$ Instrument: SYNAPT-G2#NotSet
+$$ Acquired Date: 23-Apr-2013
+$$ Acquired Time: 12:21:32
 $$ Cal MS1 Static: 0.000000000000000e0,1.000000000000000e0,T0
+$$ Cal MS1 Dynamic Params: 400,8000,0.0000,0.00,0.0,0.0,0.0,<X+>ESI_CAL_POS,<X+>SYNTHETIC_CAL_001
 $$ Cal Time: 13:36
 $$ Cal Date: 01/21/13
 $$ Cal Function 1: 7.472570630168562e-3,9.997778508664235e-1,-7.096970379984908e-7,4.609145074701771e-9,T1

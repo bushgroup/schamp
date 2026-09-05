@@ -371,6 +371,143 @@ else:
         "recalibration: none" in calibration.MzFrame(cal=cal).describe(),
     )
 
+    # covers() reports and does not refuse (lab record, task 11), so what has to hold
+    # is that an extrapolated species still gets placed and still says it was.
+    check_close(
+        "an m/z outside the fitted range is still placed",
+        frame.reader_mz(1800.0),
+        cal.to_chromatogram_frame(recal.to_measured(1800.0)),
+    )
+    check_true(
+        "and note_for says it was extrapolated",
+        "extrapolated" in frame.note_for(1800.0),
+    )
+    check_true(
+        "while an m/z inside the range gets no such clause",
+        "extrapolated" not in frame.note_for(800.0),
+    )
+    check_true(
+        "a frame with no recalibration never claims extrapolation",
+        "extrapolated" not in calibration.MzFrame(cal=cal).note_for(1800.0),
+    )
+
+    # from_spectrum: the fit an analysis makes for itself, from a spectrum rather than
+    # from a list of measured positions. Synthetic again, and with one species absent
+    # from the spectrum so the skip-and-count path is exercised.
+    spectrum_module = importlib.import_module("schamp.spectrum")
+    grid = np.arange(200.0, 1500.0, 0.004)
+    intensity = np.zeros_like(grid)
+    for centre in displaced[:-1]:
+        intensity += 1.0e5 * np.exp(-0.5 * ((grid - centre) / 0.01) ** 2)
+    synthetic = spectrum_module.MassSpectrum(
+        mz=grid, intensity=intensity, acquisition="synthetic"
+    )
+    from_spectrum = calibration.Recalibration.from_spectrum(
+        synthetic, [(mz, f"ref {index}") for index, mz in enumerate(true_mz)], order=1
+    )
+    check_true(
+        "a recalibration fitted from a spectrum skips a species that is not in it",
+        from_spectrum.species == len(true_mz) - 1 and from_spectrum.offered == len(true_mz),
+    )
+    check_true(
+        "and says how many it was offered",
+        f"of {len(true_mz)} offered" in from_spectrum.describe(),
+    )
+    check_close(
+        "and recovers the displacement it was built from",
+        from_spectrum.to_measured(800.0),
+        (1.0002 * math.sqrt(800.0) - 0.0035) ** 2,
+        rel=1e-4,
+    )
+    check_raises(
+        "a spectrum with too few of the species is refused, naming both counts",
+        calibration.CalibrationError,
+        lambda: calibration.Recalibration.from_spectrum(
+            synthetic, true_mz, order=1, min_apex=1.0e9
+        ),
+    )
+    check_raises(
+        "and an empty reference list is refused rather than fitted",
+        calibration.CalibrationError,
+        lambda: calibration.Recalibration.from_spectrum(synthetic, [], order=1),
+    )
+
+    # The provenance the file carries. The fixture header is a cross-polarity
+    # calibration three months stale, which is the shape of the real 2013 defect.
+    provenance = calibration.CalibrationProvenance.from_raw(FIXTURES)
+    check_true(
+        "the calibration's name and calibrant come off the dynamic-params line",
+        provenance.calibration == "<X+>ESI_CAL_POS"
+        and provenance.calibrant == "<X+>SYNTHETIC_CAL_001",
+    )
+    check_true("its mass range too", provenance.mass_range == (400.0, 8000.0))
+    check_true(
+        "two date formats in one header both parse",
+        provenance.age_days is not None and 91.0 < provenance.age_days < 92.0,
+    )
+    check_true("the polarity comes from _extern.inf", provenance.polarity == "ES-")
+    check_true("and the cross-polarity marker is read", provenance.cross_polarity)
+    concerns = provenance.concerns()
+    check_true(
+        "concerns names the stale calibration and the polarity, and nothing else",
+        len(concerns) == 2
+        and any("polarity" in c for c in concerns)
+        and any("days old" in c for c in concerns),
+    )
+    check_true(
+        "a longer tolerance drops the staleness complaint but not the polarity one",
+        len(provenance.concerns(stale_after_days=365.0)) == 1,
+    )
+    check_true("and the description is one line", "\n" not in provenance.describe())
+    missing = calibration.CalibrationProvenance.from_raw("no/such/dir")
+    check_true(
+        "a file with no header records nothing rather than raising",
+        missing.calibration is None and missing.age_days is None,
+    )
+    check_true(
+        "and says that is what happened",
+        any("no mass calibration at all" in c for c in missing.concerns()),
+    )
+
+    # from_calibrant is the whole-frame borrow, and the polarity check is the reason it
+    # is a constructor rather than a note. The fixture is ES-, so ES- passes.
+    borrowed = calibration.MzFrame.from_calibrant(FIXTURES, recal, for_acquisition=FIXTURES)
+    check_true(
+        "a borrowed frame carries the calibrant's calibration function, not the analyte's",
+        borrowed.cal.coefficients == cal.coefficients
+        and borrowed.recalibration is recal,
+    )
+    check_true(
+        "and it is not the same thing as handing over the residual alone",
+        borrowed.reader_mz(800.0) != calibration.MzFrame(recalibration=recal, cal=identity).reader_mz(800.0),
+    )
+    with tempfile.TemporaryDirectory() as other_polarity:
+        with open(
+            os.path.join(other_polarity, schamp.extern.EXTERN_FILENAME), "w", encoding="utf-8"
+        ) as handle:
+            handle.write("Polarity\t\tES+\n")
+        check_raises(
+            "a calibrant of the other polarity is refused, since that was measured to fail",
+            calibration.CalibrationError,
+            lambda: calibration.MzFrame.from_calibrant(
+                FIXTURES, recal, for_acquisition=other_polarity
+            ),
+        )
+        check_true(
+            "unless the caller says it has shown otherwise",
+            calibration.MzFrame.from_calibrant(
+                FIXTURES,
+                recal,
+                for_acquisition=other_polarity,
+                allow_polarity_mismatch=True,
+            ).cal.coefficients
+            == cal.coefficients,
+        )
+    check_true(
+        "and with no acquisition named there is nothing to check it against",
+        calibration.MzFrame.from_calibrant(FIXTURES, recal).recalibration is recal,
+    )
+
 # --------------------------------------------------------------------------------
 section("the experiment data model")
 work = tempfile.mkdtemp(prefix="schamp-check-")
@@ -415,6 +552,57 @@ try:
         "a mistyped column is refused",
         schamp.experiment.ExperimentError,
         lambda: schamp.load_experiment(os.path.join(work, "typo.toml")),
+    )
+
+    # [recalibration]: an experiment-level table, because the fit belongs to the series
+    # (lab record, task 11). Same strictness as the columns, for the same reason.
+    check_true("an experiment with no [recalibration] has none", experiment.recalibration is None)
+
+    def experiment_with(block, name):
+        with open(os.path.join(work, f"{name}.toml"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(f'schema = 1\nprofile = "uw-synapt-g2"\n\n[defaults]\ntemperature_K = 301.13\n\n{block}')
+        return schamp.load_experiment(os.path.join(work, f"{name}.toml"))
+
+    listed = experiment_with(
+        "[recalibration]\norder = 1\nmin_apex = 2.0e4\n"
+        'species = [ { mz = 392.7148, label = "CsI 1+ n=1" }, { mz = 652.5248 }, '
+        "{ mz = 912.3347 } ]\n",
+        "recal",
+    )
+    spec = listed.recalibration
+    check_true(
+        "a [recalibration] block is read whole",
+        spec is not None
+        and spec.order == 1
+        and spec.min_apex == 2.0e4
+        and len(spec.species) == 3,
+    )
+    check_true("a species keeps its label, and may have none", spec.species[0][1] == "CsI 1+ n=1" and spec.species[1][1] == "")
+    check_true(
+        "and with no species listed the anchor is the analysis's own",
+        "the species the analysis places windows on"
+        in experiment_with("[recalibration]\norder = 1\n", "bare").recalibration.describe(),
+    )
+    for block, why in (
+        ("[recalibration]\nmin_apax = 100.0\n", "a mistyped key is refused"),
+        ("[recalibration]\norder = 0\n", "an order below 1 is refused"),
+        ("[recalibration]\norder = 1.5\n", "a fractional order is refused"),
+        ('[recalibration]\nspecies = [ { mz = 400.0, labell = "x" } ]\n', "a mistyped species key is refused"),
+        ("[recalibration]\nspecies = [ { label = \"x\" } ]\n", "a species with no mz is refused"),
+        ("[recalibration]\nspecies = [ { mz = -1.0 } ]\n", "a non-positive reference m/z is refused"),
+        ("[recalibration]\nspecies = [ { mz = 400.0 }, { mz = 800.0 } ]\n", "too few species for the order is refused"),
+        ("[recalibration]\nmin_apex = -1.0\n", "a negative intensity floor is refused"),
+        ("[recalibration]\nallow_polarity_mismatch = true\n", "allowing a mismatch with no calibrant is refused"),
+    ):
+        check_raises(why, schamp.experiment.ExperimentError, lambda b=block: experiment_with(b, "bad"))
+    check_true(
+        "a named calibrant resolves under data_dir",
+        experiment_with(
+            '[recalibration]\ncalibrant = "cal.raw"\n'
+            "species = [ { mz = 400.0 }, { mz = 800.0 }, { mz = 1200.0 } ]\n",
+            "cal",
+        ).recalibration.calibrant_path
+        == os.path.abspath(os.path.join(work, "cal.raw")),
     )
 
     # extern: overrides

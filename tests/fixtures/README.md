@@ -29,10 +29,19 @@ never in this repository.
 
 ## `_HEADER.TXT`
 
-**Synthetic, unlike its neighbour, and deliberately so.** Eleven lines in the layout
+**Synthetic, unlike its neighbour, and deliberately so.** Fourteen lines in the layout
 MassLynx writes -- `$$ Key: value`, CRLF -- carrying what the parser and
 `schamp.calibration` have to handle and what no single real file holds all of at once:
 
+- **`Cal MS1 Dynamic Params`, carrying MassLynx's `<X+>` marker**, with an acquisition
+  stamp three months after the calibration stamp. That pair is what
+  `calibration.CalibrationProvenance` reads, and it is the shape of a real defect seen on
+  these instruments: a calibration fitted in the other polarity and left in place for a
+  quarter of a year. The calibration and calibrant names are invented, like everything
+  else here; the *shape* of the line is what the parser is being held to. The date
+  formats disagree with each other on purpose -- `dd-Mmm-yyyy` for the acquisition and
+  `mm/dd/yy` for the calibration -- because a real header does that, and a parser that
+  assumes one format silently gets the other one wrong.
 - **`Cal Function 1`, a real cubic**, copied verbatim from a 2013-04-23 acquisition on
   the UW Synapt G2. It is the calibration polynomial the spectrum readers apply and the
   chromatogram reader does not, so it is the one line in this file that no SDK accessor
