@@ -20,8 +20,8 @@ than 0.6 % in the mean and the worst single ion is within 2 %. The worked exampl
 guide to taking a series of your own.
 
 schamp is a library, and the notebook is the way in to the analysis. The one program is the run
-sheet kept at the instrument, `schamp-acquire`, there is no tagged release, and the API is still
-moving. The development record
+sheet kept at the instrument, `schamp-acquire`. Version 0.1.0, tagged on 5 September 2026 as a
+citable point (`CITATION.cff`), predates the run sheet, and the API is still moving. The development record
 that sequences the work lives in a private companion repository.
 
 ## What it does
