@@ -16,15 +16,15 @@ you are reading this file *without* that import, you have a public clone — the
 
 - **Run anything with `uv run <path/to/script.py>`** — no flags, no venv activation. Never rely on
   the `python` on PATH.
-- **`uv run tools/check_public.py`** after touching `src/schamp/` or `examples/`. Data-free and
-  SDK-free: a clone with no Waters SDK, no license and no `.raw` must pass it. Checks that need the
-  SDK report SKIPPED, never FAIL, when it is absent. Set `SCHAMP_SMOKE_RAW` to an acquisition to
-  add the reads that need one.
-- **The module layout is settled** (lab record, task 03): only `extract` and `sdk` may touch the
-  SDK, `atd.ATD` is the seam, and everything else must keep running without one. Hardware
-  constants belong in an instrument profile TOML and per-acquisition conditions in a conditions
-  table — never in analysis code. New physics goes beside the closed forms in `constants.py`,
-  which derives its numbers and types none.
+- **`uv run tools/check_public.py`** after touching `src/schamp/` or `examples/`. Data- and SDK-free:
+  a clone with no Waters SDK, no license and no `.raw` must pass it; checks that need the SDK report
+  SKIPPED, never FAIL, without it. `SCHAMP_SMOKE_RAW` names an acquisition for the reads needing one.
+- **The module layout is settled** (lab record, task 03): only `extract` and `sdk` may touch the SDK,
+  `atd.ATD` is the seam, and everything else keeps running without one. The GUI in `acquire/` imports
+  PySide6 (the optional extra `schamp[acquire]`) only in its widget modules; `acquire/model.py` runs
+  without Qt and the self-check SKIPs without it. Hardware constants belong in an instrument profile
+  TOML, per-acquisition conditions in a conditions table — never in analysis code. New physics goes
+  beside the closed forms in `constants.py`, which derives its numbers and types none.
 - **The Waters MassLynx SDK is never committed** — not the wheel, not `MassLynxRaw.dll`, not
   `license.key`, not the zip, not the help files. Its EULA does not permit redistribution. Users
   install it from their own Waters download into gitignored `external/masslynxsdk/`
@@ -37,8 +37,8 @@ you are reading this file *without* that import, you have a public clone — the
   `uv run tools/bootstrap.py` at a pinned commit) is the lab's own SDK wrapper and the best set of
   worked SDK examples; **it is never imported**, only read. Never vendor, edit or reformat anything
   under `external/`.
-- **Windows only.** MassLynx and the instruments run Windows; the SDK's Linux build is untested here
-  and not promised.
+- **Windows 10/11 only, on an analysis PC** — never on the instrument's acquisition PC; data arrives
+  over a share or by copy. The SDK's Linux build is untested here and not promised.
 - **Lab-side paths resolve through `schamp.lab_dir()`**: `$SCHAMP_LAB`, then this root, then the
   sibling `../schamp-lab`. Code in `src/` refers to lab material only in opaque form ("lab record,
   task NN"), never by a path that only resolves lab-side.
@@ -46,8 +46,7 @@ you are reading this file *without* that import, you have a public clone — the
   opaque references ("lab record, task 04") at most. Trailer is `Assisted-by: <model name>`, no
   email — never `Co-Authored-By:`. `.githooks/commit-msg` rewrites, `.githooks/pre-commit` rejects
   staged files over 5 MiB and any path inside a `.raw` directory; both need
-  `git config core.hooksPath .githooks` once per clone.
-- **`.gitattributes` pins `* text=auto eol=lf`.**
+  `git config core.hooksPath .githooks` once per clone. `.gitattributes` pins `* text=auto eol=lf`.
 - **Outward-facing prose (README, `docs/`, `examples/`, user guides) follows the `manuscript-voice`
   skill** from the lab repo. Repo-internal prose (this file, docstrings, commit messages) does not.
 - **BSD 3-Clause, `LICENSE`, copyright University of Washington** (lab record, task 09). It does
@@ -57,4 +56,4 @@ you are reading this file *without* that import, you have a public clone — the
 ## Maintaining this file
 
 This file stays lean: rules for working *in this repo*, nothing about the science or the project's
-state. Those belong in the lab repo's CLAUDE.md and notes. Keep it under 60 lines.
+state — those belong in the lab repo's CLAUDE.md and notes. Keep it under 60 lines.
