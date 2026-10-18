@@ -10,6 +10,12 @@ not record them, how they go into the conditions table, and the failure modes th
 unusable. Read it before an acquisition, and read it alongside
 [`examples/README.md`](../examples/README.md), which is the analysis end of the same workflow.
 
+[`acquiring-with-schamp-acquire.md`](acquiring-with-schamp-acquire.md) is the software side of
+the same acquisition: installing the run sheet, `schamp-acquire`, on a Windows 10 or 11 analysis
+PC, supplying the Waters SDK at first start, pointing it at a share or importing a finished
+series, working down the sheet during a session, reading the Live tab's plots, and where the
+files it writes go next.
+
 ## Reference documents
 
 Both files are open access under the Creative Commons Attribution 3.0 Unported Licence, which is

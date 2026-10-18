@@ -49,7 +49,9 @@ in a private companion repository.
   one conditions table per experiment, with the acquisitions excluded from a regression marked in
   that table with their reason rather than dropped in code.
 - Documents how to acquire a drift-voltage series on an RF-confining drift cell instrument, in
-  [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md).
+  [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md), and how
+  to keep its record with the run sheet, in
+  [`docs/acquiring-with-schamp-acquire.md`](docs/acquiring-with-schamp-acquire.md).
 
 ## Requirements
 
@@ -125,68 +127,36 @@ installs from its own download. Note that a `uv sync` following a Python version
 `.venv/` and drops the import path entry. Rerun the installer with `--relink` to restore it.
 
 The installed run sheet does the same work through its own wizard, offered at first start and
-kept under Tools > Install the Waters SDK. Give it the same zip, and either the key that came
-inside it or a key Waters sent separately. It verifies, unpacks, and loads the SDK exactly as
-`install_sdk.py` does, into `%LOCALAPPDATA%\schamp\masslynxsdk\`, and records the path of a
-separately sent key in `%USERPROFILE%\.schamp.ini`. Until it has run, the Live tab says what it is
-waiting for, and the run sheet works without it. Uninstalling the run sheet leaves that folder in
-place, because it belongs to your Waters licence rather than to schamp; delete it by hand when no
-copy of schamp needs it. To install without the window, for example on several PCs, run
-`schamp-acquire --install-sdk path\to\667007504DDRevA.zip`.
+kept under Tools > Install the Waters SDK, and installs into `%LOCALAPPDATA%\schamp\masslynxsdk\`
+instead. [`docs/acquiring-with-schamp-acquire.md`](docs/acquiring-with-schamp-acquire.md) covers
+it, including a key that Waters sent apart from the download.
 
 ## At the instrument
 
-To keep the record of a series while it is acquired, run the run sheet on the analysis PC beside
-the instrument:
+To keep the record of a series while it is acquired, run the run sheet, `schamp-acquire`, on the
+analysis PC beside the instrument. It plans the series on the lab's standard order, i.e., the
+fourteen (Helium Cell DC, IMS Bias) settings of the 2013 polyalanine series in the order they were
+acquired, takes the pressure for each acquisition as it is read off the manometer, and writes
+`experiment.toml` and `conditions.csv`, the two files the analysis reads, after every edit. Once
+the `.raw` directories are visible, over a share during the session or imported afterwards, it
+compares the voltages each acquisition recorded with the plan, and its Live tab fits each
+acquisition as it finishes and plots arrival time against reciprocal drift voltage and the cross
+section as it stands. These are the same calls as the worked example below, and on the 2013 anion
+series they give the same cross sections to the last printed digit.
+
+To install it, download the installer (`schamp-acquire-<version>-win64-setup.exe`) or the portable
+zip from the [latest release](https://github.com/bushgroup/schamp/releases/latest). The installer
+needs no administrator rights, and at first start either one offers to install the Waters SDK from
+your own download.
+[`docs/acquiring-with-schamp-acquire.md`](docs/acquiring-with-schamp-acquire.md) is the guide to
+installing it, supplying the SDK, pointing it at the data, running a session, and reading the live
+plots. From a checkout, run
 
 ```bash
 uv run schamp-acquire data-experiment/my-series
 ```
 
-To run it without a development checkout, download `schamp-acquire-0.2.0-win64-setup.exe` from
-the [latest release](https://github.com/bushgroup/schamp/releases/latest) and run it. It installs
-for the current user under `%LOCALAPPDATA%\Programs` and needs no administrator rights, except to
-install the Microsoft Visual C++ runtime on a PC that lacks a current one, which it offers as an
-option. The portable zip on the same page runs from any folder it is unpacked into. At first
-start, either one offers to install the Waters SDK from your own download (below). In a checkout
-installed without the `dev` group, install the optional extra that carries Qt and run
-`uv run --extra acquire schamp-acquire` instead. The run sheet opens a new series on the lab's
-standard order, i.e., the fourteen (Helium Cell DC, IMS Bias) settings of the 2013 polyalanine
-series in the order they were acquired, which visits 74 to 352 V out of sequence so that a
-pressure drifting over a morning does not track the drift voltage. Each row shows the planned
-settings, the drift voltage they give through the instrument profile, and the name MassLynx will
-give the acquisition (`<base>_NNN.raw`, numbered as a sample list numbers them). To record an
-acquisition, type the pressure from the manometer's display into its row and tick it as taken.
-The session temperature is typed once. Rows can be edited, added, removed and reordered, and a
-lab with an order of its own copies
-[`uw-standard-14.toml`](src/schamp/data/series/uw-standard-14.toml) and loads that instead.
-
-Every edit is written at once to the series' `experiment.toml` and `conditions.csv`, the same two
-files the analysis reads, and the plan itself is kept in a `runsheet.toml` beside them, so
-closing the window loses nothing and reopening the folder resumes the session. The checks the
-analysis will run are shown as the record changes, and a row that still lacks a pressure is
-marked. Once the `.raw` directories are visible, over a share during the session or copied in
-afterwards with the importer below (also on the File menu), the run sheet reads each
-acquisition's `_extern.inf` and puts the drift voltage the instrument recorded beside the one
-that was planned, naming any knob that was not moved. A share that stops answering is shown as
-unreachable after 8 s, and the run sheet keeps working without it, since nothing in it needs
-the acquisitions.
-
-To follow the analysis while the series is acquired, open the Live tab and name the species to
-watch, either typed (m/z, signed charge, and a label) or clicked on the total spectrum of the
-first finished acquisition. As each acquisition finishes, the tab fits its arrival-time
-distribution and plots the latest distribution with its Gaussian fit, arrival time against
-reciprocal drift voltage, and the cross section as it stands, from the third point on. These are
-the same calls as the worked example below, and on the 2013 anion series they give the same
-cross sections to the last printed digit. An acquisition counts as finished when `_extern.inf`
-and `_FUNC001.IDX` are present and nothing in the directory has changed size over three looks
-4 s apart. That rule is a default rather than a measurement of how MassLynx writes a file, so a
-lab can change any of its terms in the `[watch]` table of `runsheet.toml`, and an acquisition
-that changes after it was read is read again. Rows marked `use = false` are plotted but left out
-of the regression, and a point more than three times the other points' rms residual off the line
-is ringed. Finish series writes `results.json` and `ccs.csv` beside `experiment.toml`, each cross
-section carrying its gas, charge, pressure, and temperature. Without the Waters SDK or its
-license key, the tab says so and the run sheet works as before.
+or, in a checkout installed without the `dev` group, `uv run --extra acquire schamp-acquire`.
 
 ## Using it
 

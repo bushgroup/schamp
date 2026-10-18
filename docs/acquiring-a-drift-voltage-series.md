@@ -251,8 +251,11 @@ acquisition,pressure_Torr,use,notes
 130423_SJA_NPALAN_1_003.raw,2.026,true,
 ```
 
-`examples/data/npalan/conditions.csv` and `examples/data/palan/conditions.csv` are the two
-tables of the published series, complete, and they are the shape to copy. They carry the
+The run sheet, `schamp-acquire`, writes both files as the series is acquired, a row at a time,
+and [`acquiring-with-schamp-acquire.md`](acquiring-with-schamp-acquire.md) is the guide to it.
+To fill them in by hand instead, `examples/data/npalan/conditions.csv` and
+`examples/data/palan/conditions.csv` are the two tables of the published series, complete, and
+they are the shape to copy. They carry the
 temperature as a per-row column rather than in `[defaults]`, which reads the same and is the
 older form; `[defaults]` is the better place for a value that is the same on every row, and one
 session temperature is exactly that.

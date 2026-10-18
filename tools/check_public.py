@@ -26,6 +26,7 @@ import importlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -108,6 +109,37 @@ check_true(
 check_true(
     "docs/ holds the acquisition guide",
     os.path.isfile(os.path.join(schamp.DOCS_DIR, "acquiring-a-drift-voltage-series.md")),
+)
+check_true(
+    "docs/ holds the run sheet's guide",
+    os.path.isfile(os.path.join(schamp.DOCS_DIR, "acquiring-with-schamp-acquire.md")),
+)
+
+
+def _broken_links() -> list[str]:
+    """Relative links in the outward-facing markdown that name no file in the checkout."""
+    pages = [os.path.join(schamp.ROOT, "README.md")] + [
+        os.path.join(folder, name)
+        for folder in (schamp.DOCS_DIR, os.path.join(schamp.ROOT, "examples"))
+        for name in sorted(os.listdir(folder)) if name.endswith(".md")
+    ]
+    broken = []
+    for page in pages:
+        text = open(page, encoding="utf-8").read()
+        for target in re.findall(r"\]\(([^)\s]+)\)", text):
+            target = target.split("#", 1)[0]
+            if not target or "://" in target or target.startswith("mailto:"):
+                continue
+            if not os.path.exists(os.path.join(os.path.dirname(page), target)):
+                broken.append(f"{os.path.relpath(page, schamp.ROOT)} -> {target}")
+    return broken
+
+
+_links = _broken_links()
+check_true(
+    "relative links in README, docs/ and examples/ resolve"
+    + (f" (broken: {'; '.join(_links)})" if _links else ""),
+    not _links,
 )
 check_true("DATA_DIR ships with the package", os.path.isdir(schamp.DATA_DIR))
 
