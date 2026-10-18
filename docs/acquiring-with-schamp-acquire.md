@@ -217,17 +217,21 @@ The **Checks** panel at the bottom runs the analysis's own checks on the record 
 is saved, and states how many of the sheet's acquisitions are visible in the data folder.
 Before any acquisition is visible, it checks the tables alone; after, it also opens every
 visible acquisition's `_extern.inf` and checks it against the instrument profile, including the
-mobility wave height and the pushes per drift bin. "No problems found, acquisitions included",
-with no red cell in the **ΔV** column (below), is the state to leave the instrument in.
+mobility wave height and the pushes per drift bin, and against the voltages its row planned
+(below). "No problems found, acquisitions included" is the state to leave the instrument in.
 
 ### Planned against recorded
 
 Once an acquisition is visible, the run sheet reads the voltages it recorded and fills
-**V recorded** and **ΔV**, the difference from the plan. MassLynx records each setpoint as typed,
-so a knob that was set as planned gives a ΔV of zero, and any difference larger than 0.05 V
-turns both cells red. The tooltip on a red cell names the knob, its planned value, and its
-recorded value. The **Series** tab marks each recorded voltage with a cross beside its planned
-circle.
+**V recorded** and **ΔV**, the difference from the plan, in the two columns beside
+**V nominal**. MassLynx records each setpoint as typed, so a knob that was set as planned gives
+a ΔV of zero, and any difference larger than 0.05 V turns both cells red. The tooltip on a red
+cell names the knob, its planned value, and its recorded value, and for a ticked row the
+**Checks** panel carries the same comparison as one line per acquisition, for example
+`S_002.raw: recorded Helium Cell DC 0 V against 110 V planned; IMSBias 132 V against 240 V
+planned; drift voltage 86.96 V against 302.40 V planned`. Unticking **Use** removes that
+line, which is how an acquisition taken at the wrong voltage is kept on record but set aside.
+The **Series** tab marks each recorded voltage with a cross beside its planned circle.
 
 A red row is caught while the instrument is still available. Note that the analysis always uses
 the voltage the acquisition recorded, never the planned one, so a red row is a series that did
