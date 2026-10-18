@@ -220,7 +220,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.load_session_fields()
         self.view.resizeColumnsToContents()
         # Filled by the first scan, after this sizing has run.
-        for head, width in (("Notes", 220), (".raw", 80), ("V recorded", 80), ("ΔV", 60)):
+        for head, width in (("V recorded", 80), ("ΔV", 60), ("Notes", 160), (".raw", 80)):
             self.view.setColumnWidth(self.table.column_of(head), width)
         self.save()
 
@@ -339,7 +339,7 @@ class MainWindow(QtWidgets.QMainWindow):
             scan = model.scan_data_dir(snapshot.data_path)
             problems = None
             if scan.reachable and any(scan.externs):
-                problems = snapshot.validate(require_raw=True)
+                problems = snapshot.validate(require_raw=True, scan=scan)
             return snapshot.set_dir, scan, problems
 
         self.worker.submit("scan", job)

@@ -96,7 +96,10 @@ class RunSheetTable(QtCore.QAbstractTableModel):
 
     edited = QtCore.Signal()
 
-    FIXED_HEADS = ("V nominal", "Acquisition", "Taken", "P / Torr", "Use", "Notes", ".raw", "V recorded", "ΔV")
+    # The recorded voltage sits beside the planned one, ahead of the columns whose width
+    # grows with what is typed (names, notes), so the comparison is on screen without a
+    # horizontal scroll at the window's default size.
+    FIXED_HEADS = ("V nominal", "V recorded", "ΔV", "Acquisition", "Taken", "P / Torr", "Use", "Notes", ".raw")
 
     def __init__(self, sheet: model.RunSheet, parent: QtCore.QObject | None = None) -> None:
         super().__init__(parent)

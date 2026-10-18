@@ -14,7 +14,10 @@ anywhere, and small enough to commit. To fill one in for a series of your own, s
 from [`docs/acquiring-a-drift-voltage-series.md`](../docs/acquiring-a-drift-voltage-series.md),
 which covers the acquisition end of this workflow: the instrument state, choosing the
 drift voltages, and what to read off the manometer and the cell thermocouples while
-the series runs. **The acquisitions themselves are not here.** The
+the series runs, and
+[`docs/acquiring-with-schamp-acquire.md`](../docs/acquiring-with-schamp-acquire.md), which
+covers the run sheet that writes both files during the session and runs this notebook's calls
+on each acquisition as it arrives. **The acquisitions themselves are not here.** The
 series is two sets of 14 Waters `.raw` directories, about 5.4 GB, and this repository
 never ships one: `docs/README.md` and the top-level `CLAUDE.md` say why.
 

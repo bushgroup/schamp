@@ -641,6 +641,40 @@ class RunSheet:
                 knobs.append((key, want, got))
         return VoltageCheck(profile.drift_voltage(planned), recorded, tuple(knobs), error)
 
+    def check_record(self, scan: DataDirScan, profile: InstrumentProfile | None = None) -> list[str]:
+        """One complaint per taken, used, planned row whose acquisition did not record its plan.
+
+        The red cells of the table's ΔV column, as lines for a list of problems. A row with
+        Use unticked is left out: that is how an acquisition is kept on record but set
+        aside. A sidecar missing a key the profile needs is not repeated here, because
+        `Experiment.validate` already reports it against the same acquisition.
+        """
+        if not scan.reachable:
+            return []
+        try:
+            profile = profile or self.load_profile()
+        except ProfileError:
+            return []  # reported by `Experiment.validate`, which loads the same profile
+        problems: list[str] = []
+        for row in self.rows:
+            extern = scan.externs.get(row.acquisition)
+            if not (row.taken and row.use and row.planned and extern):
+                continue
+            check = self.check_recorded(row, extern, profile)
+            if check.agrees or (not check.knobs and check.delta_v is None):
+                continue
+            knobs = "; ".join(
+                f"{key} {'nothing' if got is None else f'{got:g} V'} against {want:g} V planned"
+                for key, want, got in check.knobs
+            )
+            drift = (
+                f"drift voltage {check.recorded_v:.2f} V against {check.planned_v:.2f} V planned"
+                if check.delta_v is not None
+                else ""
+            )
+            problems.append(f"{row.acquisition}: recorded {'; '.join(t for t in (knobs, drift) if t)}")
+        return problems
+
     # -- checks (these touch the data directory: call them off the GUI thread) ------
 
     @property
@@ -648,12 +682,13 @@ class RunSheet:
         """`data_dir` resolved against the set directory."""
         return os.path.abspath(os.path.join(self.set_dir, self.data_dir or "."))
 
-    def validate(self, *, require_raw: bool = False) -> list[str]:
+    def validate(self, *, require_raw: bool = False, scan: DataDirScan | None = None) -> list[str]:
         """`Experiment.validate` over the record as saved, plus the sheet's own checks.
 
         Reads the files `save()` wrote, so a GUI calls it after saving. With
         `require_raw`, it stats every acquisition under `data_dir`, which can block on a
-        share that has gone away.
+        share that has gone away. Given a `scan` of the data directory, it adds
+        `check_record`'s complaints: the taken rows that did not record their plan.
         """
         problems: list[str] = []
         names = [row.acquisition for row in self.rows]
@@ -664,6 +699,8 @@ class RunSheet:
                 f"no acquisition is ticked as taken yet, so {DEFAULT_CONDITIONS} has nothing to check"
             )
             return problems
+        if scan is not None:
+            problems.extend(self.check_record(scan))
         try:
             experiment = load_experiment(self.set_dir)
         except ExperimentError as exc:
