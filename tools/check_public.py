@@ -35,6 +35,7 @@ import schamp.constants as C
 import schamp.experiment
 import schamp.extract
 import schamp.extern
+import schamp.importer
 import schamp.mobility
 import schamp.profiles
 import schamp.report
@@ -631,6 +632,18 @@ try:
         lambda: schamp.load_experiment(os.devnull),
     )
 
+    # A blank pressure is the importer's seeded state: it loads, and validate names it.
+    with open(os.path.join(work, "blank.csv"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("acquisition,pressure_Torr,temperature_K\nx.raw,,300.0\ny.raw,2.0,300.0\n")
+    with open(os.path.join(work, "blank.toml"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write('schema = 1\nprofile = "uw-synapt-g2"\nconditions = "blank.csv"\n')
+    blank = schamp.load_experiment(os.path.join(work, "blank.toml"))
+    check_true("a blank pressure with no default loads as None", blank.conditions[0].pressure_torr is None)
+    check_true(
+        "and validate names the row that still wants one",
+        sum("row 2: no pressure_Torr" in p for p in blank.validate(require_raw=False)) == 1,
+    )
+
     # --------------------------------------------------------------------------
     section("reporting conventions")
     written = schamp.report.write_results({"answer": 42}, work, task="check-public")
@@ -643,6 +656,163 @@ try:
         and len(stamped["date"]) == 10,
     )
     check_true("figure defaults keep vector text as text", schamp.report.figure_defaults()["pdf.fonttype"] == 42)
+finally:
+    shutil.rmtree(work, ignore_errors=True)
+
+# --------------------------------------------------------------------------------
+section("importing a set of acquisitions")
+# Synthetic .raw-shaped directories: the committed _extern.inf, a _HEADER.TXT carrying
+# an acquisition time, and a few files of noise standing in for the binary data. Named
+# so that name order and acquisition order disagree, and carrying the files MassLynx
+# and a sync client add after the fact, which must not be copied.
+work = tempfile.mkdtemp(prefix="schamp-import-")
+try:
+    share = os.path.join(work, "share")
+    set_dir = os.path.join(work, "data-experiment", "synthetic-set")
+    rng = np.random.default_rng(19)
+
+    def fake_raw(name, acquired, *, finished=True):
+        raw = os.path.join(share, name)
+        os.makedirs(os.path.join(raw, "_mob"), exist_ok=True)
+        if finished:
+            shutil.copyfile(os.path.join(FIXTURES, "_extern.inf"), os.path.join(raw, "_extern.inf"))
+        with open(os.path.join(raw, "_HEADER.TXT"), "w", encoding="latin-1", newline="\r\n") as fh:
+            fh.write(f"$$ Acquired Date: 23-Apr-2013\n$$ Acquired Time: {acquired}\n")
+        for data in ("_FUNC001.DAT", "_FUNC001.IDX", "_func001.cdt"):
+            with open(os.path.join(raw, data), "wb") as fh:
+                fh.write(rng.bytes(int(rng.integers(1000, 200_000))))
+        for litter in ("_HISTORY.INF", "desktop.ini", os.path.join("_mob", "_dt.bin")):
+            with open(os.path.join(raw, litter), "wb") as fh:
+                fh.write(b"written after the fact")
+        return raw
+
+    fake_raw("S_001.raw", "12:30:00")
+    fake_raw("S_002.raw", "12:10:00")
+    fake_raw("S_003.raw", "12:20:00")
+    fake_raw("S_004.raw", "12:40:00", finished=False)
+
+    first = schamp.importer.import_set(share, set_dir)
+    check_true(
+        "the finished acquisitions import and the unfinished one is skipped",
+        sorted(first.imported) == ["S_001.raw", "S_002.raw", "S_003.raw"]
+        and first.unfinished == ["S_004.raw"]
+        and first.ok,
+    )
+    check_true("the set verifies against its manifest", schamp.importer.verify(set_dir) == [])
+    manifest_lines = open(os.path.join(set_dir, "MANIFEST.sha256"), "rb").read().split(b"\n")
+    check_true(
+        "the manifest is sha256sum format with LF endings",
+        manifest_lines[-1] == b""
+        and all(
+            len(line.split(b"  ", 1)[0]) == 64 and b"\r" not in line and b"\\" not in line
+            for line in manifest_lines[:-1]
+        ),
+    )
+    listed = schamp.importer.read_manifest(set_dir)
+    check_true("every file of every acquisition is listed", len(listed) == 3 * 5)
+    check_true(
+        "what MassLynx writes on opening, and sync-client litter, are neither copied nor listed",
+        not any("_mob" in k or "HISTORY" in k or "desktop" in k for k in listed)
+        and not os.path.exists(os.path.join(set_dir, "S_001.raw", "_mob")),
+    )
+    sha256sum = shutil.which("sha256sum")
+    if sha256sum:
+        checked = subprocess.run(
+            [sha256sum, "--check", "--strict", "--quiet", "MANIFEST.sha256"],
+            cwd=set_dir, capture_output=True, text=True,
+        )
+        check_true("sha256sum --check agrees, with nothing of schamp's", checked.returncode == 0)
+    else:
+        skip("sha256sum --check agrees, with nothing of schamp's", "no sha256sum on PATH")
+
+    seeded = schamp.load_experiment(set_dir)
+    check_true(
+        "the seeded set loads by directory, with the default profile",
+        seeded.profile.name == "uw-synapt-g2" and seeded.title == "synthetic-set",
+    )
+    check_true(
+        "the table is in acquisition-time order, not name order",
+        [c.acquisition for c in seeded.conditions] == ["S_002.raw", "S_003.raw", "S_001.raw"],
+    )
+    check_true(
+        "pressure and temperature are left blank, and use is true",
+        all(c.pressure_torr is None and c.temperature_k is None and c.use for c in seeded.conditions),
+    )
+    blanks = [p for p in seeded.validate(require_raw=False) if "no pressure_Torr" in p or "no temperature_K" in p]
+    check_true("validate says every blank wants typing in", len(blanks) == 6)
+    check_true(
+        "the drift voltage comes from the sidecar through the profile",
+        seeded.conditions[0].drift_voltage(seeded.profile)
+        == profile.drift_voltage(schamp.extern.parse_extern_inf(FIXTURES)),
+    )
+
+    second = schamp.importer.import_set(share, set_dir)
+    check_true(
+        "a second import adds nothing",
+        second.imported == [] and sorted(second.present) == ["S_001.raw", "S_002.raw", "S_003.raw"],
+    )
+
+    # The operator types a pressure; the acquisition that was still going finishes.
+    conditions_path = os.path.join(set_dir, "conditions.csv")
+    typed = open(conditions_path, encoding="utf-8").read().replace("S_002.raw,,,", "S_002.raw,2.031,301.1,")
+    open(conditions_path, "w", encoding="utf-8", newline="").write(typed)
+    shutil.copyfile(os.path.join(FIXTURES, "_extern.inf"), os.path.join(share, "S_004.raw", "_extern.inf"))
+    third = schamp.importer.import_set(share, set_dir)
+    reloaded = schamp.load_experiment(set_dir)
+    check_true(
+        "a newly finished acquisition is appended to the manifest and the table",
+        third.imported == ["S_004.raw"]
+        and [c.acquisition for c in reloaded.conditions][-1] == "S_004.raw"
+        and len(schamp.importer.read_manifest(set_dir)) == 4 * 5,
+    )
+    check_true("a typed pressure survives the append", reloaded.conditions[0].pressure_torr == 2.031)
+    readme = open(os.path.join(set_dir, "README.md"), encoding="utf-8").read()
+    check_true("the README records each import that added something", readme.count("\n- ") == 2)
+
+    # A file rewritten at the source after it was imported.
+    with open(os.path.join(share, "S_003.raw", "_FUNC001.IDX"), "ab") as fh:
+        fh.write(b"\x00")
+    changed = schamp.importer.import_set(share, set_dir)
+    check_true(
+        "a source changed after import is reported and not overwritten",
+        changed.changed == ["S_003.raw"] and schamp.importer.verify(set_dir) == [],
+    )
+    replaced = schamp.importer.import_set(share, set_dir, replace_changed=True)
+    check_true(
+        "and replaced when asked, verifying again",
+        replaced.replaced == ["S_003.raw"] and schamp.importer.verify(set_dir) == [],
+    )
+
+    # A local copy deleted: copied back from a source that still matches.
+    shutil.rmtree(os.path.join(set_dir, "S_001.raw"))
+    check_true("a missing acquisition fails verify", any("S_001.raw" in p for p in schamp.importer.verify(set_dir)))
+    check_true(
+        "but not in tables-only mode",
+        schamp.importer.verify(set_dir, require_raw=False) == [],
+    )
+    restored = schamp.importer.import_set(share, set_dir, select=["S_001*"])
+    check_true(
+        "and is copied back from a source that still matches the manifest",
+        restored.restored == ["S_001.raw"] and schamp.importer.verify(set_dir) == [],
+    )
+
+    # One byte flipped on the destination.
+    target = os.path.join(set_dir, "S_002.raw", "_FUNC001.DAT")
+    with open(target, "r+b") as fh:
+        byte = fh.read(1)
+        fh.seek(0)
+        fh.write(bytes([byte[0] ^ 0x01]))
+    problems = schamp.importer.verify(set_dir)
+    check_true(
+        "a single tampered byte fails verify, naming the file",
+        len(problems) == 1 and "S_002.raw/_FUNC001.DAT" in problems[0],
+    )
+    check_raises(
+        "the importer refuses a profile that does not load",
+        schamp.profiles.ProfileError,
+        lambda: schamp.importer.import_set(share, os.path.join(work, "other"), profile="no-such-instrument"),
+    )
+    check_true("and has copied nothing by then", not os.path.exists(os.path.join(work, "other")))
 finally:
     shutil.rmtree(work, ignore_errors=True)
 

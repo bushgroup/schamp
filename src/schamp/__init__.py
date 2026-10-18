@@ -15,7 +15,8 @@ Waters SDK:
 
 Around them sit the things that describe the measurement rather than perform it:
 `profiles` (the cell geometry and the drift-voltage definition, per instrument),
-`experiment` (which acquisitions, at what pressure and temperature), `extern` (the
+`experiment` (which acquisitions, at what pressure and temperature), `importer`
+(copying a set of acquisitions onto the analysis PC, verified), `extern` (the
 two reads the SDK does not offer), `calibration` (the acquisition's two m/z frames,
 and where a window has to be placed to land on an ion), `constants` (CODATA and the
 closed forms), and `sdk` (finding the license key and opening the readers).

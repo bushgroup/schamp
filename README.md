@@ -123,6 +123,27 @@ installs from its own download. Note that a `uv sync` following a Python version
 
 ## Using it
 
+To bring a series onto the analysis PC, copy it with the importer rather than with a file
+manager:
+
+```bash
+uv run tools/import_set.py <source> data-experiment/my-series
+```
+
+The source is wherever the acquisition PC left the `.raw` directories, i.e., a share, a mapped
+drive, or a USB stick. Every file is hashed with SHA-256 as it is read and again after it is
+written, and an acquisition is moved into place only when every file agrees, so an interrupted
+copy never leaves half an acquisition under its real name. The importer writes a
+`MANIFEST.sha256` that `sha256sum -c` reads without schamp installed, a starting
+`experiment.toml`, a `conditions.csv` with one row per acquisition in order of acquisition time,
+and a `README.md` that records each import. Pressure and temperature are left blank in the
+table, because neither is recorded in the acquisition files, and `Experiment.validate()` lists
+every row that still lacks them. Running the same command after each new acquisition copies only
+what is new, whereas an acquisition still being written (one with no `_extern.inf`) is skipped
+until it is finished, and one that changed at the source after import is reported rather than
+overwritten. On the 2013 polyalanine cations, the importer copied and verified fourteen
+acquisitions (1.9 GB) between two local disks in 14 s.
+
 An analysis starts from two files that describe a series, an `experiment.toml` naming the
 instrument profile and the gas, and a `conditions.csv` beside it with one row per acquisition
 carrying the pressure and temperature that were written down by hand. The example's
@@ -181,10 +202,11 @@ this cell now running on G2, G2-S, and G2-Si instruments. To use another instrum
 ```
 src/schamp/      the package. extract and sdk are the only modules that touch the
                  Waters SDK; atd (the distribution and its fit), mobility (the
-                 regression and the cross section), profiles, experiment,
+                 regression and the cross section), profiles, experiment, importer,
                  calibration, spectrum, extern, constants, and report run without it
 src/schamp/data/ the shipped instrument profile
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
+                 import_set.py (copies a series onto the analysis PC, verified),
                  check_public.py (the self-check)
 tests/fixtures/  the sidecars one 2013 acquisition wrote, verbatim, for the self-check
 docs/            the acquisition guide, the 2016 Analyst paper and its supporting

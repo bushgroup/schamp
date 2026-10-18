@@ -46,9 +46,11 @@ here and not a column there: fourteen fits and one shared fit place a species wi
 ----------------
 
 One row per acquisition. `acquisition` is required; `pressure_Torr` and
-`temperature_K` are required either per row or in `[defaults]`. Column names are
-matched case-insensitively; the spellings below are canonical, and carry their unit
-because a pressure without one is how a 2.04 becomes a 2.028.
+`temperature_K` are required either per row or in `[defaults]` -- by `validate()`,
+not by the loader, so that a table seeded at import time with those cells blank
+loads, and says which rows still want a number typed in. Column names are matched
+case-insensitively; the spellings below are canonical, and carry their unit because
+a pressure without one is how a 2.04 becomes a 2.028.
 
     acquisition         path to the .raw directory, relative to `data_dir`
     pressure_Torr       drift-cell pressure for this acquisition
@@ -208,12 +210,16 @@ class Conditions:
     `path` is absolute and resolved; `acquisition` is what the table said, and is what
     error messages and result tables use. `row` is the 1-based line number in the CSV,
     counting the header, so that a complaint can point at the line to fix.
+
+    `pressure_torr` and `temperature_k` are None when neither the row nor `[defaults]`
+    gives one -- a table seeded by `importer` before anyone has typed the readings
+    in. `Experiment.validate` reports every such row; nothing downstream accepts None.
     """
 
     acquisition: str
     path: str
-    pressure_torr: float
-    temperature_k: float
+    pressure_torr: float | None
+    temperature_k: float | None
     gas: str
     use: bool = True
     pressure_torr_err: float | None = None
@@ -311,7 +317,12 @@ class Experiment:
                 ("pressure_Torr", row.pressure_torr),
                 ("temperature_K", row.temperature_k),
             ):
-                if not value > 0.0:
+                if value is None:
+                    problems.append(
+                        f"{where}: no {label}, and none in [defaults] of {self.source}; "
+                        "type the reading in"
+                    )
+                elif not value > 0.0:
                     problems.append(f"{where}: {label} must be positive; got {value}")
             for label, value in (
                 ("pressure_Torr_err", row.pressure_torr_err),
@@ -500,16 +511,12 @@ def _read_conditions(
             return ""
         return (record.get(source) or "").strip()
 
-    def defaulted(record: Mapping[str, str], column: str, where: str) -> float:
+    def defaulted(record: Mapping[str, str], column: str, where: str) -> float | None:
         text = cell(record, column)
         if text:
             return _as_float(text, column, where)
         fallback = defaults.get(column)
-        if fallback is None:
-            raise ExperimentError(
-                f"{where}: no {column}, and none in [defaults] of the experiment file"
-            )
-        return float(fallback)  # type: ignore[arg-type]
+        return None if fallback is None else float(fallback)  # type: ignore[arg-type]
 
     rows: list[Conditions] = []
     for offset, record in enumerate(reader, start=2):
