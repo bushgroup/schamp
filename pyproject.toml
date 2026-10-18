@@ -1,6 +1,6 @@
 [project]
 name = "schamp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Acquire and analyze ion mobility mass spectrometry data from RF-confining drift cells on Waters Synapt instruments."
 requires-python = "==3.12.*"
 license = "BSD-3-Clause"

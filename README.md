@@ -20,9 +20,11 @@ than 0.6 % in the mean and the worst single ion is within 2 %. The worked exampl
 guide to taking a series of your own.
 
 schamp is a library, and the notebook is the way in to the analysis. The one program is the run
-sheet kept at the instrument, `schamp-acquire`. Version 0.1.0, tagged on 5 September 2026 as a
-citable point (`CITATION.cff`), predates the run sheet, and the API is still moving. The development record
-that sequences the work lives in a private companion repository.
+sheet kept at the instrument, `schamp-acquire`, which is also released as a Windows installer.
+Each tagged version is a citable point (`CITATION.cff`). Version 0.2.0, released on 17 October
+2026, is the first to carry the run sheet and its installer, whereas 0.1.0 (5 September 2026) is
+the library alone. The API is still moving. The development record that sequences the work lives
+in a private companion repository.
 
 ## What it does
 
@@ -122,6 +124,16 @@ redistribution. Everything the installer writes goes into `external/`, which is 
 installs from its own download. Note that a `uv sync` following a Python version change rebuilds
 `.venv/` and drops the import path entry. Rerun the installer with `--relink` to restore it.
 
+The installed run sheet does the same work through its own wizard, offered at first start and
+kept under Tools > Install the Waters SDK. Give it the same zip, and either the key that came
+inside it or a key Waters sent separately. It verifies, unpacks, and loads the SDK exactly as
+`install_sdk.py` does, into `%LOCALAPPDATA%\schamp\masslynxsdk\`, and records the path of a
+separately sent key in `%USERPROFILE%\.schamp.ini`. Until it has run, the Live tab says what it is
+waiting for, and the run sheet works without it. Uninstalling the run sheet leaves that folder in
+place, because it belongs to your Waters licence rather than to schamp; delete it by hand when no
+copy of schamp needs it. To install without the window, for example on several PCs, run
+`schamp-acquire --install-sdk path\to\667007504DDRevA.zip`.
+
 ## At the instrument
 
 To keep the record of a series while it is acquired, run the run sheet on the analysis PC beside
@@ -131,7 +143,13 @@ the instrument:
 uv run schamp-acquire data-experiment/my-series
 ```
 
-Outside a development checkout, install the optional extra that carries Qt and run
+To run it without a development checkout, download `schamp-acquire-0.2.0-win64-setup.exe` from
+the [latest release](https://github.com/bushgroup/schamp/releases/latest) and run it. It installs
+for the current user under `%LOCALAPPDATA%\Programs` and needs no administrator rights, except to
+install the Microsoft Visual C++ runtime on a PC that lacks a current one, which it offers as an
+option. The portable zip on the same page runs from any folder it is unpacked into. At first
+start, either one offers to install the Waters SDK from your own download (below). In a checkout
+installed without the `dev` group, install the optional extra that carries Qt and run
 `uv run --extra acquire schamp-acquire` instead. The run sheet opens a new series on the lab's
 standard order, i.e., the fourteen (Helium Cell DC, IMS Bias) settings of the 2013 polyalanine
 series in the order they were acquired, which visits 74 to 352 V out of sequence so that a
@@ -249,8 +267,8 @@ this cell now running on G2, G2-S, and G2-Si instruments. To use another instrum
 ## Layout
 
 ```
-src/schamp/      the package. extract and sdk are the only modules that touch the
-                 Waters SDK; atd (the distribution and its fit), mobility (the
+src/schamp/      the package. extract, sdk, and sdk_install are the only modules that
+                 touch the Waters SDK; atd (the distribution and its fit), mobility (the
                  regression and the cross section), profiles, experiment, importer,
                  calibration, spectrum, extern, constants, and report run without it;
                  acquire is the run sheet and its live analysis, and only their
@@ -258,7 +276,8 @@ src/schamp/      the package. extract and sdk are the only modules that touch th
 src/schamp/data/ the shipped instrument profile and the standard series template
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
                  import_set.py (copies a series onto the analysis PC, verified),
-                 check_public.py (the self-check)
+                 check_public.py (the self-check), build_exe.py and installer/ (the
+                 Windows installer and portable zip of the run sheet)
 tests/fixtures/  the sidecars one 2013 acquisition wrote, verbatim, for the self-check
 docs/            the acquisition guide, the 2016 Analyst paper and its supporting
                  information, with an index
