@@ -72,7 +72,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Mapping
 
 from .calibration import CalibrationProvenance
-from .experiment import DEFAULT_CONDITIONS, EXPERIMENT_FILENAME
+from .experiment import DEFAULT_CONDITIONS, EXPERIMENT_FILENAME, toml_string
 from .extern import EXTERN_FILENAME
 from .profiles import load_profile
 from .report import write_table
@@ -359,21 +359,15 @@ def verify(set_dir: str | os.PathLike[str], *, require_raw: bool = True) -> list
 # --- seeding the tables ------------------------------------------------------------------
 
 
-def _toml_string(text: str) -> str:
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    escaped = "".join(c if c >= " " else f"\\u{ord(c):04x}" for c in escaped)
-    return f'"{escaped}"'
-
-
 def _seed_experiment(path: str, *, title: str, profile: str, today: str) -> None:
     lines = [
         f"# Seeded by schamp.importer on {today}. The importer writes this file once and",
         "# never again: everything below is yours to edit.",
         "schema = 1",
-        f"title = {_toml_string(title)}",
-        f"profile = {_toml_string(profile)}",
+        f"title = {toml_string(title)}",
+        f"profile = {toml_string(profile)}",
         '# gas = "helium"              # the profile\'s default when absent',
-        f"conditions = {_toml_string(DEFAULT_CONDITIONS)}",
+        f"conditions = {toml_string(DEFAULT_CONDITIONS)}",
         'data_dir = "."',
         'notes = ""',
         "",

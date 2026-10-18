@@ -21,6 +21,10 @@ two reads the SDK does not offer), `calibration` (the acquisition's two m/z fram
 and where a window has to be placed to land on an ion), `constants` (CODATA and the
 closed forms), and `sdk` (finding the license key and opening the readers).
 
+`acquire` is the run sheet an operator keeps while acquiring a series, `schamp-acquire`:
+its `model` needs nothing extra, and its window needs PySide6, the optional extra
+`schamp[acquire]`.
+
 Everything but `extract` and `sdk` runs on a machine with no SDK, no license and no
 acquisition, which is what `tools/check_public.py` exercises.
 

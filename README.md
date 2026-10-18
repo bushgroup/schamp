@@ -19,8 +19,9 @@ than 0.6 % in the mean and the worst single ion is within 2 %. The worked exampl
 [`docs/acquiring-a-drift-voltage-series.md`](docs/acquiring-a-drift-voltage-series.md) is the
 guide to taking a series of your own.
 
-schamp is a library, and the notebook is the way in. There is no command-line interface and no
-graphical one, there is no tagged release, and the API is still moving. The development record
+schamp is a library, and the notebook is the way in to the analysis. The one program is the run
+sheet kept at the instrument, `schamp-acquire`, there is no tagged release, and the API is still
+moving. The development record
 that sequences the work lives in a private companion repository.
 
 ## What it does
@@ -121,6 +122,38 @@ redistribution. Everything the installer writes goes into `external/`, which is 
 installs from its own download. Note that a `uv sync` following a Python version change rebuilds
 `.venv/` and drops the import path entry. Rerun the installer with `--relink` to restore it.
 
+## At the instrument
+
+To keep the record of a series while it is acquired, run the run sheet on the analysis PC beside
+the instrument:
+
+```bash
+uv run schamp-acquire data-experiment/my-series
+```
+
+Outside a development checkout, install the optional extra that carries Qt and run
+`uv run --extra acquire schamp-acquire` instead. The run sheet opens a new series on the lab's
+standard order, i.e., the fourteen (Helium Cell DC, IMS Bias) settings of the 2013 polyalanine
+series in the order they were acquired, which visits 74 to 352 V out of sequence so that a
+pressure drifting over a morning does not track the drift voltage. Each row shows the planned
+settings, the drift voltage they give through the instrument profile, and the name MassLynx will
+give the acquisition (`<base>_NNN.raw`, numbered as a sample list numbers them). To record an
+acquisition, type the pressure from the manometer's display into its row and tick it as taken.
+The session temperature is typed once. Rows can be edited, added, removed and reordered, and a
+lab with an order of its own copies
+[`uw-standard-14.toml`](src/schamp/data/series/uw-standard-14.toml) and loads that instead.
+
+Every edit is written at once to the series' `experiment.toml` and `conditions.csv`, the same two
+files the analysis reads, and the plan itself is kept in a `runsheet.toml` beside them, so
+closing the window loses nothing and reopening the folder resumes the session. The checks the
+analysis will run are shown as the record changes, and a row that still lacks a pressure is
+marked. Once the `.raw` directories are visible, over a share during the session or copied in
+afterwards with the importer below (also on the File menu), the run sheet reads each
+acquisition's `_extern.inf` and puts the drift voltage the instrument recorded beside the one
+that was planned, naming any knob that was not moved. A share that stops answering is shown as
+unreachable after 8 s, and the run sheet keeps working without it, since nothing in it needs
+the acquisitions.
+
 ## Using it
 
 To bring a series onto the analysis PC, copy it with the importer rather than with a file
@@ -203,8 +236,9 @@ this cell now running on G2, G2-S, and G2-Si instruments. To use another instrum
 src/schamp/      the package. extract and sdk are the only modules that touch the
                  Waters SDK; atd (the distribution and its fit), mobility (the
                  regression and the cross section), profiles, experiment, importer,
-                 calibration, spectrum, extern, constants, and report run without it
-src/schamp/data/ the shipped instrument profile
+                 calibration, spectrum, extern, constants, and report run without it;
+                 acquire is the run sheet, and only its window needs Qt
+src/schamp/data/ the shipped instrument profile and the standard series template
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
                  import_set.py (copies a series onto the analysis PC, verified),
                  check_public.py (the self-check)

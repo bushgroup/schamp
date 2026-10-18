@@ -73,6 +73,16 @@ claim about the instrument, so it is per-row, explicit, and shows up in the reco
 No SDK: an experiment loads and validates without one, and `validate()` will check
 that the `.raw` directories exist and that their sidecars are consistent with the
 profile, using nothing but `extern`.
+
+Writing
+-------
+
+`write_experiment` emits `experiment.toml` and `write_conditions_table` the CSV, each by
+writing a temporary file beside the target and renaming it over the target, so a reader
+-- or a crash -- never sees half a file. `read_conditions_table` reads the CSV back as
+text, comment block and column order included, so a program that edits a few cells
+(the acquisition run sheet) writes back everything else exactly as it found it. What
+these write, `load_experiment` reads.
 """
 
 from __future__ import annotations
@@ -96,7 +106,12 @@ __all__ = [
     "ExperimentError",
     "RECALIBRATION_KEYS",
     "RecalibrationSpec",
+    "ConditionsTable",
     "load_experiment",
+    "read_conditions_table",
+    "toml_string",
+    "write_conditions_table",
+    "write_experiment",
 ]
 
 EXPERIMENT_FILENAME = "experiment.toml"
@@ -728,4 +743,191 @@ def load_experiment(path: str | os.PathLike[str]) -> Experiment:
         ),
         conditions_source=os.path.abspath(conditions_path),
         notes=str(table.get("notes") or ""),
+    )
+
+
+# --- writing --------------------------------------------------------------------
+
+
+def toml_string(text: str) -> str:
+    """`text` as a TOML basic string, quotes and escapes included."""
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = "".join(c if c >= " " else f"\\u{ord(c):04x}" for c in escaped)
+    return f'"{escaped}"'
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return toml_string(str(value))
+
+
+def _replace_atomically(path: str, write) -> str:
+    """Call `write(temp_path)`, then rename the result over `path`.
+
+    The temporary file sits beside the target, so the rename never crosses a volume.
+    On Windows the rename fails with `PermissionError` while another program holds the
+    target open -- a spreadsheet, typically -- and the target is then left as it was.
+    """
+    path = os.path.abspath(os.fspath(path))
+    temp = os.path.join(os.path.dirname(path), f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    try:
+        write(temp)
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.remove(temp)
+    return path
+
+
+def write_experiment(
+    path: str | os.PathLike[str],
+    *,
+    title: str,
+    profile: str,
+    gas: str | None = None,
+    conditions: str = DEFAULT_CONDITIONS,
+    data_dir: str = ".",
+    notes: str = "",
+    defaults: Mapping[str, object] | None = None,
+    recalibration: RecalibrationSpec | None = None,
+    comment: str = "",
+) -> str:
+    """Write an `experiment.toml`, atomically. `path` may be the file or its directory.
+
+    `profile` and `data_dir` are written as given -- a builtin name, a path relative to
+    the file, a UNC path -- since that is what `load_experiment` resolves. `gas=None`
+    leaves the profile's default to apply. `defaults` keys must be conditions columns.
+    `comment` heads the file as `#` lines. Comments in an existing file are not kept:
+    the file is regenerated from these fields, which are the whole of what it can hold.
+    Returns the absolute path written.
+    """
+    target = os.fspath(path)
+    if os.path.isdir(target):
+        target = os.path.join(target, EXPERIMENT_FILENAME)
+    lines = [f"# {line}" if line.strip() else "#" for line in comment.splitlines()]
+    lines += [
+        f"schema = {SCHEMA}",
+        f"title = {toml_string(title)}",
+        f"profile = {toml_string(profile)}",
+    ]
+    if gas:
+        lines.append(f"gas = {toml_string(gas)}")
+    lines += [
+        f"conditions = {toml_string(conditions)}",
+        f"data_dir = {toml_string(data_dir)}",
+        f"notes = {toml_string(notes)}",
+    ]
+    if defaults:
+        lines += ["", "[defaults]"]
+        for key, value in defaults.items():
+            if not any(c.lower() == str(key).lower() for c in CONDITIONS_COLUMNS):
+                raise ExperimentError(
+                    f"[defaults] has no column {key!r}; one of {', '.join(CONDITIONS_COLUMNS)}"
+                )
+            lines.append(f"{key} = {_toml_value(value)}")
+    if recalibration is not None:
+        spec = recalibration
+        lines += ["", "[recalibration]", f"order = {spec.order}"]
+        if spec.min_apex:
+            lines.append(f"min_apex = {spec.min_apex!r}")
+        if spec.calibrant is not None:
+            lines.append(f"calibrant = {toml_string(spec.calibrant)}")
+        if spec.allow_polarity_mismatch:
+            lines.append("allow_polarity_mismatch = true")
+        if spec.species:
+            lines.append("species = [")
+            lines += [
+                f"    {{ mz = {mz!r}, label = {toml_string(label)} }},"
+                for mz, label in spec.species
+            ]
+            lines.append("]")
+    text = "\n".join(lines) + "\n"
+
+    def write(temp: str) -> None:
+        with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+
+    return _replace_atomically(target, write)
+
+
+@dataclass
+class ConditionsTable:
+    """A conditions CSV as text: its `#` comment block, its header, and its rows.
+
+    Every cell is the string the file holds, unparsed, and `header` keeps the file's own
+    spelling and order, so writing a table back changes only the cells a caller changed.
+    `comment` is the leading block with the `# ` prefixes taken off, which is what
+    `write_conditions_table` puts back on.
+    """
+
+    header: list[str]
+    rows: list[dict[str, str]] = field(default_factory=list)
+    comment: str = ""
+
+    def column(self, name: str) -> str | None:
+        """The header's own spelling of a column, matched case-insensitively."""
+        return next((h for h in self.header if h.lower() == name.lower()), None)
+
+    def get(self, row: Mapping[str, str], name: str) -> str:
+        """One cell of `row`, by column name matched case-insensitively; empty if absent."""
+        column = self.column(name)
+        return (row.get(column) or "").strip() if column else ""
+
+
+def read_conditions_table(path: str | os.PathLike[str]) -> ConditionsTable:
+    """Read a conditions CSV as text, for a program that edits it and writes it back.
+
+    Raises `ExperimentError` for an unreadable file or one with no header row. Nothing
+    is validated here; `load_experiment` is the reader that does that.
+    """
+    path = os.fspath(path)
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            lines = handle.read().splitlines()
+    except OSError as exc:
+        raise ExperimentError(f"cannot read the conditions table {path}: {exc.strerror}") from exc
+    comment: list[str] = []
+    body: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        if not body and stripped.startswith("#"):
+            text = stripped[1:]
+            comment.append(text[1:] if text.startswith(" ") else text)
+        elif line.strip() and not stripped.startswith("#"):
+            body.append(line)
+    if not body:
+        raise ExperimentError(f"{path} has no header row")
+    reader = csv.reader(body)
+    header = [h.strip() for h in next(reader)]
+    rows = [
+        {name: (cells[i] if i < len(cells) else "") for i, name in enumerate(header)}
+        for cells in reader
+    ]
+    return ConditionsTable(header=header, rows=rows, comment="\n".join(comment))
+
+
+def write_conditions_table(
+    path: str | os.PathLike[str],
+    header: Iterable[str],
+    rows: Iterable[Mapping[str, object] | Iterable[object]],
+    *,
+    comment: str = "",
+) -> str:
+    """Write a conditions CSV, atomically, in the shape `report.write_table` writes.
+
+    A row may be a sequence in header order, or a mapping keyed by the header's names,
+    in which case a missing key is an empty cell. Returns the absolute path written.
+    """
+    from .report import write_table  # noqa: PLC0415 -- keeps report out of the import graph
+
+    header = list(header)
+    cells = [
+        [row.get(name, "") for name in header] if isinstance(row, Mapping) else list(row)
+        for row in rows
+    ]
+    return _replace_atomically(
+        os.fspath(path), lambda temp: write_table(temp, header, cells, comment=comment)
     )

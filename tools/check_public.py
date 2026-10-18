@@ -8,8 +8,10 @@ reported as SKIPPED when it is absent, never as FAIL.
 What it covers: the physics identities on synthetic input, the instrument-profile
 format and its drift-voltage formula, the `_extern.inf` parser against a real
 sidecar committed as a fixture, the experiment data model against a table written
-and read back in a temporary directory, and the reporting conventions. Also that
-the not-yet-implemented layers say so rather than returning something plausible.
+and read back in a temporary directory, the acquisition run sheet's model, and the
+reporting conventions. Also that the not-yet-implemented layers say so rather than
+returning something plausible. The run sheet's window is opened offscreen when
+PySide6 (the optional extra schamp[acquire]) is installed, and SKIPPED when not.
 
 This is the public counterpart of the lab repo's regression check, which
 additionally pins the pipeline against the archived polyalanine numbers and
@@ -815,6 +817,248 @@ try:
     check_true("and has copied nothing by then", not os.path.exists(os.path.join(work, "other")))
 finally:
     shutil.rmtree(work, ignore_errors=True)
+
+# --------------------------------------------------------------------------------
+section("writing an experiment, and reading it back")
+# Both shipped example tables, given an experiment.toml by write_experiment and copied
+# through read_conditions_table / write_conditions_table: the CSV must come back byte
+# for byte, and the experiment must load the same.
+work = tempfile.mkdtemp(prefix="schamp-write-")
+try:
+    for series in ("npalan", "palan"):
+        src = os.path.join(schamp.ROOT, "examples", "data", series, "conditions.csv")
+        dst = os.path.join(work, series)
+        os.makedirs(dst)
+        table = schamp.experiment.read_conditions_table(src)
+        schamp.experiment.write_conditions_table(
+            os.path.join(dst, "conditions.csv"), table.header, table.rows, comment=table.comment
+        )
+        with open(src, "rb") as a, open(os.path.join(dst, "conditions.csv"), "rb") as b:
+            check_true(f"{series}: the conditions table round-trips byte for byte", a.read() == b.read())
+        schamp.experiment.write_experiment(
+            dst,
+            title=f'{series} "130423", ES±',
+            profile="uw-synapt-g2",
+            gas="helium",
+            notes="line one\nline two\\",
+            defaults={"temperature_K": 301.13},
+            recalibration=schamp.experiment.RecalibrationSpec(
+                order=1, species=((392.7148, "CsI 1+ n=1"), (652.5248, "n=2"), (912.3348, "n=3")), min_apex=2.0e4
+            ),
+        )
+        first = schamp.load_experiment(dst)
+        schamp.experiment.write_experiment(
+            dst,
+            title=first.title,
+            profile=first.profile.name,
+            gas=first.gas,
+            notes=first.notes,
+            defaults={"temperature_K": 301.13},
+            recalibration=first.recalibration,
+        )
+        second = schamp.load_experiment(dst)
+        rows = lambda e: [  # noqa: E731
+            (c.acquisition, c.pressure_torr, c.temperature_k, c.gas, c.use, c.notes) for c in e.conditions
+        ]
+        check_true(
+            f"{series}: write_experiment's file loads, and loads the same written again",
+            first.title == second.title == f'{series} "130423", ES±'
+            and first.notes == second.notes == "line one\nline two\\"
+            and first.recalibration == second.recalibration
+            and first.recalibration.min_apex == 2.0e4
+            and rows(first) == rows(second)
+            and len(first.used) == 10,
+        )
+    check_raises(
+        "write_experiment refuses a [defaults] key that is not a column",
+        schamp.experiment.ExperimentError,
+        lambda: schamp.experiment.write_experiment(work, title="t", profile="p", defaults={"pressure": 2.0}),
+    )
+    leftovers = [f for _, _, files in os.walk(work) for f in files if f.endswith(".tmp")]
+    check_true("an atomic write leaves no temporary file behind", leftovers == [])
+finally:
+    shutil.rmtree(work, ignore_errors=True)
+
+# --------------------------------------------------------------------------------
+section("the acquisition run sheet (no Qt)")
+import schamp.acquire.model as runsheet  # noqa: E402 -- grouped with its checks
+
+# The 130423 series' fourteen (Helium Cell DC, IMS Bias) settings in acquisition order,
+# as recorded in each acquisition's _extern.inf, and the drift voltage each gives through
+# the uw-synapt-g2 profile (lab record, tasks 01 and 14). The shipped template must
+# reproduce both.
+SERIES_130423 = [
+    (0.0, 132.0, 86.9647), (110.0, 240.0, 302.4), (18.0, 240.0, 211.4824),
+    (0.0, 125.0, 80.0471), (0.0, 149.0, 103.7647), (0.0, 119.0, 74.1176),
+    (0.0, 187.0, 141.3176), (56.0, 240.0, 249.0353), (0.0, 140.0, 94.8706),
+    (0.0, 228.0, 181.8353), (0.0, 160.0, 114.6353), (0.0, 206.0, 160.0941),
+    (160.0, 240.0, 351.8118), (0.0, 172.0, 126.4941),
+]
+template = runsheet.load_template(runsheet.DEFAULT_TEMPLATE)
+check_true("the standard template ships and loads by name", "uw-standard-14" in runsheet.builtin_templates())
+check_true(
+    "it steps Helium Cell DC and IMS Bias and holds the rest at the 130423 values",
+    template.vary == ("Helium Cell DC", "IMSBias")
+    and dict(template.fixed) == {"Helium Exit": -40.0, "Transfer DC Entrance": 4.0},
+)
+check_true(
+    "its fourteen rows are the 130423 settings in the 130423 order",
+    [row for row in template.rows] == [(dc, bias) for dc, bias, _ in SERIES_130423],
+)
+work = tempfile.mkdtemp(prefix="schamp-runsheet-")
+try:
+    set_dir = os.path.join(work, "set")
+    data_dir = os.path.join(work, "data")
+    sheet = runsheet.RunSheet.from_template(template, set_dir, base_name="S")
+    profile = sheet.load_profile()
+    worst = max(
+        abs(sheet.nominal_voltage(row, profile) - volts)
+        for row, (_, _, volts) in zip(sheet.rows, SERIES_130423)
+    )
+    check_true(f"each row's nominal drift voltage is the profile's (worst {worst:.1e} V)", worst < 1e-4)
+    check_true(
+        "acquisitions are named as a MassLynx sample list numbers them",
+        [r.acquisition for r in sheet.rows[:2]] == ["S_001.raw", "S_002.raw"],
+    )
+
+    def bad_template(text, name):
+        path = os.path.join(work, f"{name}.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('schema = 1\nprofile = "uw-synapt-g2"\n' + text)
+        return lambda: runsheet.load_template(path)
+
+    for why, text in (
+        ("a template missing a drift-voltage key is refused",
+         'vary = ["IMSBias"]\nrows = [[132.0]]\n[fixed]\n"Helium Exit" = -40.0\n"Transfer DC Entrance" = 4.0\n'),
+        ("a template naming a key the drift voltage does not use is refused",
+         'vary = ["IMSBias", "Cone"]\nrows = [[132.0, 1.0]]\n[fixed]\n"Helium Cell DC" = 0.0\n"Helium Exit" = -40.0\n"Transfer DC Entrance" = 4.0\n'),
+        ("a row with the wrong number of settings is refused",
+         'vary = ["Helium Cell DC", "IMSBias"]\nrows = [[132.0]]\n[fixed]\n"Helium Exit" = -40.0\n"Transfer DC Entrance" = 4.0\n'),
+        ("rows written after [fixed] (and so inside it) are refused",
+         'vary = ["Helium Cell DC", "IMSBias"]\n[fixed]\n"Helium Exit" = -40.0\n"Transfer DC Entrance" = 4.0\nrows = [[0.0, 132.0]]\n'),
+    ):
+        check_raises(why, runsheet.RunSheetError, bad_template(text, "bad"))
+
+    sheet.temperature_k = "301.13"
+    sheet.data_dir = data_dir
+    sheet.save()
+    check_true(
+        "a sheet with nothing taken writes experiment.toml and runsheet.toml, no table",
+        sorted(os.listdir(set_dir)) == ["experiment.toml", "runsheet.toml"],
+    )
+    check_true(
+        "and says there is nothing to check yet",
+        any("nothing to check" in p for p in sheet.validate()),
+    )
+    for row, pressure in zip(sheet.rows[:4], ("2.03", "2.03", "2.031", "")):
+        row.taken = True
+        row.cells["pressure_Torr"] = pressure
+    sheet.rows[5].cells["pressure_Torr"] = "2.04"  # typed ahead, not yet taken
+    sheet.save()
+    experiment = schamp.load_experiment(set_dir)
+    check_true(
+        "a ticked row enters conditions.csv in sheet order, and an unticked one does not",
+        [c.acquisition for c in experiment.conditions] == ["S_001.raw", "S_002.raw", "S_003.raw", "S_004.raw"],
+    )
+    check_true(
+        "the session temperature reaches every row through [defaults]",
+        all(c.temperature_k == 301.13 for c in experiment.conditions),
+    )
+    check_true(
+        "the record validates but for the one pressure not typed in",
+        [p.split(": ", 1)[1][:15] for p in sheet.validate(require_raw=False)] == ["no pressure_Tor"],
+    )
+
+    # schamp.importer appends to the same table while the sheet is open; a row the
+    # sheet wrote and then unticked must stay out, and a row it never saw must come in.
+    with open(sheet.conditions_path, "a", encoding="utf-8", newline="") as fh:
+        fh.write("S_005.raw,,true,\nCAL.raw,,true,calibrant\n")
+    sheet.rows[3].taken = False
+    sheet.rows[0].cells["notes"] = "first, after the gas had settled"
+    sheet.save()
+    taken = [(r.acquisition, r.planned) for r in sheet.rows if r.taken]
+    check_true(
+        "a save adopts rows another writer appended, planned or not, and keeps an untick",
+        taken == [("S_001.raw", True), ("S_002.raw", True), ("S_003.raw", True), ("S_005.raw", True), ("CAL.raw", False)],
+    )
+    reopened = runsheet.RunSheet.open(set_dir)
+    check_true(
+        "a reopened sheet has the plan, the ticks, the typed-ahead cells and the session",
+        [(r.acquisition, r.taken) for r in reopened.rows] == [(r.acquisition, r.taken) for r in sheet.rows]
+        and [r.settings for r in reopened.rows] == [r.settings for r in sheet.rows]
+        and reopened.rows[5].cells.get("pressure_Torr") == "2.04"
+        and reopened.rows[0].cells.get("notes") == "first, after the gas had settled"
+        and reopened.temperature_k == "301.13"
+        and reopened.data_dir == data_dir
+        and reopened.fixed == sheet.fixed,
+    )
+    before = open(sheet.conditions_path, "rb").read()
+    reopened.save()
+    check_true("saving a reopened sheet unchanged changes nothing", open(sheet.conditions_path, "rb").read() == before)
+
+    # Planned against recorded: two .raw directories carrying the committed sidecar,
+    # which records row 1's settings, and a third that has not been finished.
+    for name in ("S_001.raw", "S_002.raw", "S_003.raw"):
+        os.makedirs(os.path.join(data_dir, name))
+    for name in ("S_001.raw", "S_002.raw"):
+        shutil.copyfile(os.path.join(FIXTURES, "_extern.inf"), os.path.join(data_dir, name, "_extern.inf"))
+    scan = runsheet.scan_data_dir(sheet.data_path)
+    check_true(
+        "a scan lists the .raw directories, and an unfinished one has no sidecar",
+        scan.reachable and sorted(scan.externs) == ["S_001.raw", "S_002.raw", "S_003.raw"] and scan.externs["S_003.raw"] == {},
+    )
+    agrees = sheet.check_recorded(sheet.rows[0], scan.externs["S_001.raw"])
+    check_true(
+        "an acquisition recorded as planned agrees",
+        agrees.agrees and abs(agrees.recorded_v - SERIES_130423[0][2]) < 1e-4,
+    )
+    differs = sheet.check_recorded(sheet.rows[1], scan.externs["S_002.raw"])
+    check_true(
+        "one whose knobs did not move is caught, naming both knobs",
+        not differs.agrees
+        and abs(differs.delta_v - (SERIES_130423[0][2] - SERIES_130423[1][2])) < 1e-4
+        and {k for k, _, _ in differs.knobs} == {"Helium Cell DC", "IMSBias"},
+    )
+    gone = runsheet.scan_data_dir(os.path.join(work, "no-such-share"))
+    check_true("an unreachable data directory is reported, not raised", not gone.reachable and gone.error)
+finally:
+    shutil.rmtree(work, ignore_errors=True)
+
+# --------------------------------------------------------------------------------
+section("the acquisition GUI (PySide6, offscreen)")
+try:
+    importlib.import_module("PySide6.QtWidgets")
+    have_qt = True
+except ImportError:
+    have_qt = False
+    for name in ("a QApplication and a QtAgg canvas construct", "the run-sheet window shows a sheet"):
+        skip(name, "PySide6 not installed; it is the optional extra schamp[acquire]")
+if have_qt:
+    # Offscreen, so this runs on a machine with no display. In a subprocess, so that the
+    # Qt platform choice and the QApplication do not leak into the checks after this one.
+    probe = r"""
+import os, sys, tempfile
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from PySide6 import QtWidgets
+app = QtWidgets.QApplication([])
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
+canvas = FigureCanvasQTAgg(Figure())
+canvas.figure.add_subplot().plot([1, 2], [3, 4])
+canvas.draw()
+print("canvas", canvas.get_width_height()[0] > 0)
+from schamp.acquire import app as gui, model
+window = gui.MainWindow()
+sheet = model.RunSheet.from_template("uw-standard-14", tempfile.mkdtemp(), base_name="S")
+window.set_sheet(sheet)
+print("window", window.table.rowCount(), window.table.data(window.table.index(0, 2)))
+"""
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
+    lines = result.stdout.split("\n")
+    check_true("a QApplication and a QtAgg canvas construct", "canvas True" in lines)
+    check_true("the run-sheet window shows a sheet", "window 14 86.96" in lines)
+    if result.returncode:
+        print(result.stderr[-2000:])
 
 # --------------------------------------------------------------------------------
 section("mass spectra and measured peak widths")

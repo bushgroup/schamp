@@ -1,0 +1,60 @@
+# The UW standard drift-voltage series: fourteen settings in a fixed pseudo-random order.
+#
+# These are the fourteen (Helium Cell DC, IMS Bias) pairs of the 2013-04-23 polyalanine
+# series, in the order they were acquired, identical for the anion and the cation runs.
+# The same series is analysed in Allen, Giles, Gilbert & Bush, Analyst 2016, 141, 884.
+# The order visits the 74-352 V range out of sequence on purpose: a pressure that drifts
+# over a morning then does not track the drift voltage, and cannot masquerade as a slope.
+#
+# This is the reference example of the series-template format, read by
+# schamp.acquire.model.load_template. To plan a series of your own, copy this file,
+# edit it, and open it from the run sheet, or load it by path.
+#
+# A template plans the knobs an operator turns. It records nothing about a run: what was
+# actually acquired, at what pressure, is written to experiment.toml and conditions.csv
+# as the run proceeds, and the drift voltage of record always comes from each
+# acquisition's own _extern.inf.
+
+schema = 1
+name = "uw-standard-14"
+title = "UW standard series, 14 drift voltages, 74-352 V"
+
+# The instrument profile whose drift-voltage formula the planned settings go through.
+# A builtin name, or a path relative to this file.
+profile = "uw-synapt-g2"
+
+# The _extern.inf keys this series steps, spelt exactly as the profile's
+# [drift_voltage] high_keys and low_keys spell them. Each row of `rows` below gives one
+# value per key, in this order, in volts.
+vary = ["Helium Cell DC", "IMSBias"]
+
+# One row per acquisition, in acquisition order: [Helium Cell DC, IMS Bias].
+# IMS Bias alone is stepped from 119 to 240 V; above that, it is held at 240 V and
+# Helium Cell DC is raised to reach 352 V.
+# The analysis of record kept the ten above 100 V (rows 2, 3, 5, 7, 8, 10-14).
+rows = [
+    [0.0, 132.0],
+    [110.0, 240.0],
+    [18.0, 240.0],
+    [0.0, 125.0],
+    [0.0, 149.0],
+    [0.0, 119.0],
+    [0.0, 187.0],
+    [56.0, 240.0],
+    [0.0, 140.0],
+    [0.0, 228.0],
+    [0.0, 160.0],
+    [0.0, 206.0],
+    [160.0, 240.0],
+    [0.0, 172.0],
+]
+
+# Every other key the drift voltage depends on, held for the whole series. These are
+# session defaults: the run sheet shows them, and they can be changed there for one
+# session without editing this file. Together, `vary` and [fixed] must name exactly the
+# profile's high_keys and low_keys, so the nominal drift voltage of every row is the
+# profile's own formula and never a second one. (A TOML table runs to the end of the
+# file or the next table, which is why this one comes last.)
+[fixed]
+"Helium Exit" = -40.0
+"Transfer DC Entrance" = 4.0
