@@ -20,8 +20,9 @@ the session (title, profile, gas, data directory, notes, and the session tempera
 `conditions.csv` when it is ticked as taken and leaves it if the tick is undone, so
 **the tick is membership of that table** and is stored nowhere else. What the two files
 cannot hold -- the planned settings, the rows not yet acquired and anything typed into
-them, the operator, the file-name base -- lives in a private `runsheet.toml` beside
-them, which no analysis reads. Every save rewrites all three, each atomically.
+them, the operator, the file-name base, and the live pane's `[watch]` rule and
+`[[species]]` (`live`) -- lives in a private `runsheet.toml` beside them, which no
+analysis reads. Every save rewrites all three, each atomically.
 
 **Sharing the table.** `schamp.importer` appends rows to the same `conditions.csv` as
 acquisitions are copied in. A save first reads the table back and adopts any row it did
@@ -60,6 +61,7 @@ from ..experiment import (
 )
 from ..extern import EXTERN_FILENAME, as_float, parse_extern_inf
 from ..profiles import InstrumentProfile, ProfileError, load_profile
+from .live import WatchRule
 
 __all__ = [
     "DEFAULT_TEMPLATE",
@@ -310,6 +312,8 @@ class RunSheet:
     comment: str = CONDITIONS_COMMENT
     other_defaults: dict[str, object] = field(default_factory=dict)
     recalibration: RecalibrationSpec | None = None
+    watch: dict[str, object] = field(default_factory=dict)
+    species: list[dict[str, object]] = field(default_factory=list)
     _written: set[str] = field(default_factory=set, repr=False)
 
     # -- construction ----------------------------------------------------------------
@@ -412,6 +416,8 @@ class RunSheet:
             sheet.operator = str(table.get("operator") or "")
             sheet.vary = tuple(str(k) for k in table.get("vary") or ())
             sheet.fixed = {str(k): float(v) for k, v in (table.get("fixed") or {}).items()}
+            sheet.watch = dict(table.get("watch") or {})
+            sheet.species = [dict(entry) for entry in table.get("species") or []]
             for entry in table.get("row") or []:
                 values = entry.get("settings") or []
                 if values and len(values) != len(sheet.vary):
@@ -538,6 +544,18 @@ class RunSheet:
             "[fixed]",
         ]
         lines += [f"{toml_string(k)} = {float(v)!r}" for k, v in self.fixed.items()]
+        lines += [
+            "",
+            "# The live pane calls a .raw finished by the [watch] rule (schamp.acquire.live.WatchRule).",
+            "# Without a [watch] table the default applies; write one to change any of its terms:",
+        ]
+        lines += [f"#   {k} = {_toml_value(v)}" for k, v in WatchRule().to_table().items()]
+        if self.watch:
+            lines.append("[watch]")
+            lines += [f"{toml_string(k)} = {_toml_value(v)}" for k, v in self.watch.items()]
+        for entry in self.species:
+            lines += ["", "[[species]]"]
+            lines += [f"{toml_string(k)} = {_toml_value(v)}" for k, v in entry.items()]
         for row in self.rows:
             lines += ["", "[[row]]", f"acquisition = {toml_string(row.acquisition)}"]
             if row.planned:
@@ -651,6 +669,17 @@ class RunSheet:
         except ExperimentError as exc:
             return problems + [str(exc)]
         return problems + experiment.validate(require_raw=require_raw)
+
+
+def _toml_value(value: object) -> str:
+    """A scalar or a list of scalars as TOML, for the run sheet's own tables."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    return toml_string(str(value))
 
 
 def _same_drive(a: str, b: str) -> bool:

@@ -154,6 +154,22 @@ that was planned, naming any knob that was not moved. A share that stops answeri
 unreachable after 8 s, and the run sheet keeps working without it, since nothing in it needs
 the acquisitions.
 
+To follow the analysis while the series is acquired, open the Live tab and name the species to
+watch, either typed (m/z, signed charge, and a label) or clicked on the total spectrum of the
+first finished acquisition. As each acquisition finishes, the tab fits its arrival-time
+distribution and plots the latest distribution with its Gaussian fit, arrival time against
+reciprocal drift voltage, and the cross section as it stands, from the third point on. These are
+the same calls as the worked example below, and on the 2013 anion series they give the same
+cross sections to the last printed digit. An acquisition counts as finished when `_extern.inf`
+and `_FUNC001.IDX` are present and nothing in the directory has changed size over three looks
+4 s apart. That rule is a default rather than a measurement of how MassLynx writes a file, so a
+lab can change any of its terms in the `[watch]` table of `runsheet.toml`, and an acquisition
+that changes after it was read is read again. Rows marked `use = false` are plotted but left out
+of the regression, and a point more than three times the other points' rms residual off the line
+is ringed. Finish series writes `results.json` and `ccs.csv` beside `experiment.toml`, each cross
+section carrying its gas, charge, pressure, and temperature. Without the Waters SDK or its
+license key, the tab says so and the run sheet works as before.
+
 ## Using it
 
 To bring a series onto the analysis PC, copy it with the importer rather than with a file
@@ -237,7 +253,8 @@ src/schamp/      the package. extract and sdk are the only modules that touch th
                  Waters SDK; atd (the distribution and its fit), mobility (the
                  regression and the cross section), profiles, experiment, importer,
                  calibration, spectrum, extern, constants, and report run without it;
-                 acquire is the run sheet, and only its window needs Qt
+                 acquire is the run sheet and its live analysis, and only their
+                 windows need Qt
 src/schamp/data/ the shipped instrument profile and the standard series template
 tools/           install_sdk.py (the Waters SDK), bootstrap.py (fetches external/),
                  import_set.py (copies a series onto the analysis PC, verified),

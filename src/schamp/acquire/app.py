@@ -25,6 +25,7 @@ from .. import __version__
 from ..constants import GASES
 from ..importer import import_set
 from . import model
+from .livepane import LivePane
 from .widgets import Background, PlanCanvas, RunSheetTable
 
 Qt = QtCore.Qt
@@ -143,10 +144,9 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
         self.canvas = PlanCanvas()
         tabs.addTab(self.canvas, "Series")
-        live = QtWidgets.QLabel("Live arrival-time view: not available in this version.")
-        live.setAlignment(Qt.AlignCenter)
-        live.setWordWrap(True)
-        tabs.addTab(live, "Live")
+        self.live = LivePane(UNREACHABLE_AFTER_S)
+        self.live.species_changed.connect(self.on_edit)
+        tabs.addTab(self.live, "Live")
         self.side_tabs = tabs
         dock = QtWidgets.QDockWidget("Plot", self)
         dock.setObjectName("plot")
@@ -200,6 +200,7 @@ class MainWindow(QtWidgets.QMainWindow):
         enabled = sheet is not None
         for widget in (self.session_dock, self.view, self.import_action, *self.row_actions):
             widget.setEnabled(enabled)
+        self.live.set_sheet(sheet)
         if sheet is None:
             self.table.set_sheet(model.RunSheet(set_dir=os.getcwd()))
             self.setWindowTitle("schamp-acquire")
@@ -255,6 +256,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.abandon()
             self.scan = None
             self.table.set_scan(None)
+            self.on_edit()
+            self.live.data_dir_changed()
+            return
         self.on_edit()
 
     def on_gas(self) -> None:
@@ -299,6 +303,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # here; the check that needs the acquisitions follows from the background scan.
         self.show_problems(self.sheet.validate(require_raw=False), with_raw=False)
         self.canvas.draw_sheet(self.table)
+        self.live.refresh_record()
         self.revalidate = True
         self.tick()
 

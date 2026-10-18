@@ -8,8 +8,9 @@ reported as SKIPPED when it is absent, never as FAIL.
 What it covers: the physics identities on synthetic input, the instrument-profile
 format and its drift-voltage formula, the `_extern.inf` parser against a real
 sidecar committed as a fixture, the experiment data model against a table written
-and read back in a temporary directory, the acquisition run sheet's model, and the
-reporting conventions. Also that the not-yet-implemented layers say so rather than
+and read back in a temporary directory, the acquisition run sheet's model, the live
+pane's watcher, completion rule and series on synthetic arrivals, and the reporting
+conventions. Also that the not-yet-implemented layers say so rather than
 returning something plausible. The run sheet's window is opened offscreen when
 PySide6 (the optional extra schamp[acquire]) is installed, and SKIPPED when not.
 
@@ -28,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import numpy as np
 
@@ -1031,7 +1033,11 @@ try:
     have_qt = True
 except ImportError:
     have_qt = False
-    for name in ("a QApplication and a QtAgg canvas construct", "the run-sheet window shows a sheet"):
+    for name in (
+        "a QApplication and a QtAgg canvas construct",
+        "the run-sheet window shows a sheet",
+        "the Live tab shows the sheet's species and its completion rule",
+    ):
         skip(name, "PySide6 not installed; it is the optional extra schamp[acquire]")
 if have_qt:
     # Offscreen, so this runs on a machine with no display. In a subprocess, so that the
@@ -1052,11 +1058,16 @@ window = gui.MainWindow()
 sheet = model.RunSheet.from_template("uw-standard-14", tempfile.mkdtemp(), base_name="S")
 window.set_sheet(sheet)
 print("window", window.table.rowCount(), window.table.data(window.table.index(0, 2)))
+sheet.species = [{"label": "1- n=10", "mz": 727.3744, "charge": -1}]
+window.set_sheet(sheet)
+app.processEvents()
+print("live", window.live.table.rowCount(), window.live.table.item(0, 0).text(), "Finished when" in window.live.status.text())
 """
     result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
     lines = result.stdout.split("\n")
     check_true("a QApplication and a QtAgg canvas construct", "canvas True" in lines)
     check_true("the run-sheet window shows a sheet", "window 14 86.96" in lines)
+    check_true("the Live tab shows the sheet's species and its completion rule", "live 1 1- n=10 True" in lines)
     if result.returncode:
         print(result.stderr[-2000:])
 
@@ -1389,6 +1400,185 @@ check_true(
 check_true("a cross section says what its error bar covers", xs.propagated == ("slope",))
 check_true("a cross section prints its conditions", "helium" in str(xs) and "Torr" in str(xs))
 check_close("K0 accompanies K", xs.reduced_mobility_cm2_v_s, C.reduce_mobility(4.2, 2.028, 301.13))
+
+# --------------------------------------------------------------------------------
+section("the live pane (no Qt): watching, completion, and the series as it arrives")
+import schamp.acquire.live as live  # noqa: E402 -- grouped with its checks
+
+rule = live.WatchRule()
+check_true(
+    "the default completion rule: _extern.inf and _FUNC001.IDX, 3 unchanged looks 4 s apart",
+    rule.files == ("_extern.inf", "_FUNC001.IDX") and rule.polls == 3 and rule.interval_s == 4.0,
+)
+check_true(
+    "a [watch] table overrides only the terms it names",
+    live.WatchRule.from_table({"polls": 5}).to_table() == {"files": list(rule.files), "polls": 5, "interval_s": 4.0},
+)
+check_raises("a [watch] key that is not a term is refused", live.LiveError, lambda: live.WatchRule.from_table({"pols": 3}))
+check_raises("one look cannot see that nothing changed", live.LiveError, lambda: live.WatchRule.from_table({"polls": 1}))
+check_raises("a species of charge 0 is refused", live.LiveError, lambda: live.Species("x", 500.0, 0))
+
+work = tempfile.mkdtemp(prefix="schamp-live-")
+try:
+    data_dir = os.path.join(work, "data")
+    os.makedirs(os.path.join(data_dir, "A.raw"))
+    watcher = live.Watcher(live.WatchRule(polls=2, interval_s=1.0))
+
+    def touch(name, size=1):
+        with open(os.path.join(data_dir, "A.raw", name), "wb") as fh:
+            fh.write(b"\0" * size)
+
+    def look():
+        return watcher.update(live.list_raws(data_dir))
+
+    touch("_extern.inf")
+    look()
+    check_true("a .raw with a required file missing is 'writing'", watcher.status("A.raw") == "writing")
+    touch("_FUNC001.IDX")
+    touch("_FUNC001.DAT", 10)
+    check_true("a change resets the count", look() == [] and watcher.status("A.raw") == "settling 1/2")
+    events = look()
+    check_true(
+        "unchanged across `polls` looks, it is finished, and the event says which rule fired",
+        [e.kind for e in events] == ["finished"] and "none changed over 2 looks" in events[0].reason,
+    )
+    check_true("a finished acquisition stays finished while nothing changes", look() == [])
+    touch("_FUNC001.DAT", 20)
+    check_true("one that grows after it was called finished is reopened", [e.kind for e in look()] == ["reopened"])
+    check_true("...and finishes again once it settles", [e.kind for e in look()] == ["finished"])
+    check_true(
+        "a share that stops answering changes nothing",
+        watcher.update(live.list_raws(os.path.join(work, "gone"))) == [] and watcher.finished == ["A.raw"],
+    )
+
+    worker = live.SerialWorker("check")
+    worker.submit("one", lambda: 1)
+    worker.submit("boom", lambda: 1 / 0)
+    worker.submit("two", lambda: 2)
+    done = []
+    for _ in range(200):
+        done += worker.drain()
+        if len(done) == 3:
+            break
+        time.sleep(0.01)
+    check_true(
+        "the worker runs jobs in order on one thread and hands back an exception as a result",
+        [t for t, _ in done] == ["one", "boom", "two"] and isinstance(done[1][1], ZeroDivisionError),
+    )
+
+    # A series arriving: synthetic ATDs at eqn (3)'s arrival times through a stand-in for
+    # the SDK read, against an experiment written the way the run sheet writes one.
+    K_TRUE, T0_TRUE, MZ, Z = 1231.8, 0.42, 727.3744, -1  # K at 2 Torr: the 1- n=10 test ion
+    slope = 1000.0 * profile.drift_length_cm**2 / K_TRUE
+    axis = np.arange(200) * 0.0692521
+    names = [f"S_{i:03d}.raw" for i in range(1, 9)]
+    volts = dict(zip(names, [104.0, 140.0, 302.4, 181.8, 249.0, 120.0, 85.0, 160.0]))
+    late = {"S_007.raw": 0.35}  # the use = false row, and off the line by 0.35 ms
+
+    def fake_reader(path, species):
+        name = os.path.basename(path)
+        centre = T0_TRUE + slope / volts[name] + late.get(name, 0.0)
+        atd = schamp.atd.ATD(
+            np.arange(200), axis, 5.0e4 * np.exp(-((axis - centre) ** 2) / (2 * 0.08**2)), MZ - 0.1, MZ + 0.1,
+            acquisition=path, label=species[0].label,
+        )
+        return {s.label: live.SpeciesResult(s, (MZ - 0.1, MZ + 0.1), "synthetic", atd) for s in species}
+
+    set_dir = os.path.join(work, "set")
+    os.makedirs(set_dir)
+    schamp.experiment.write_experiment(set_dir, title="live", profile="uw-synapt-g2", gas="helium", data_dir=data_dir)
+    schamp.experiment.write_conditions_table(
+        os.path.join(set_dir, "conditions.csv"),
+        ["acquisition", "pressure_Torr", "temperature_K", "use", "v_drift_V"],
+        [[n, 2.03, 301.13, "false" if n in late else "true", volts[n]] for n in names[:-1]],
+    )  # S_008.raw arrives but was never ticked as taken
+    experiment = schamp.load_experiment(set_dir)
+    species = live.Species("1- n=10", MZ, Z)
+    series = live.LiveSeries([species])
+    for name in names:
+        os.makedirs(os.path.join(data_dir, name), exist_ok=True)
+        series.arrive(name, os.path.join(data_dir, name))
+        acquisition, path, wanted = series.next_job()
+        series.record(series.job(acquisition, path, wanted, reader=fake_reader)(), acquisition)
+    check_true("every arrival is read once, and nothing is left to read", series.next_job() is None and len(series.results) == 8)
+    summary = series.summarise(species, experiment, profile)
+    used = [p.acquisition for p in summary.points if p.used]
+    check_true(
+        "use = false and untaken acquisitions are plotted but stay out of the regression",
+        used == names[:6] and {p.acquisition: p.why_not for p in summary.points if not p.used}
+        == {"S_007.raw": "use = false", "S_008.raw": "not in conditions.csv"},
+    )
+    direct = schamp.mobility.cross_section_from_regression(
+        schamp.mobility.regress(
+            [schamp.mobility.DriftPoint(n, volts[n], T0_TRUE + slope / volts[n]) for n in names[:6]], profile
+        ),
+        profile, charge=1, ion_mass_da=MZ, gas="helium", pressure_torr=2.03, temperature_k=301.13,
+    )
+    check_close("the live cross section is the pipeline's own", summary.cross_section.omega_a2, direct.omega_a2, rel=1e-6)
+    check_true(
+        "the running cross section starts at the third point and ends at the final one",
+        [n for n, _ in summary.running] == [3, 4, 5, 6] and summary.running[-1][1] == summary.cross_section,
+    )
+    check_true(
+        "the point off the line is flagged against the others' rms, and no other",
+        [p.acquisition for p in summary.points if p.outlier] == ["S_007.raw"],
+    )
+    series.add_species(live.Species("2- n=20", 640.0, -2))
+    check_true(
+        "a species added later queues a re-read of the finished acquisitions for it alone",
+        [s.label for s in series.next_job()[2]] == ["2- n=20"],
+    )
+    series.remove_species("2- n=20")
+    series.reopen("S_003.raw")
+    check_true("a reopened acquisition leaves the series until it is read again", "S_003.raw" not in series.results)
+    series.arrive("S_003.raw", os.path.join(data_dir, "S_003.raw"))
+    acquisition, path, wanted = series.next_job()
+    series.record(series.job(acquisition, path, wanted, reader=fake_reader)(), acquisition)
+    json_path, csv_path = series.finish(experiment, set_dir)
+    table = schamp.experiment.read_conditions_table(csv_path)
+    with open(json_path, encoding="utf-8") as fh:
+        written = json.load(fh)["results"]
+    check_true(
+        "finishing writes ccs.csv (gas, charge, P and T beside every cross section) and results.json",
+        len(table.rows) == 1
+        and abs(float(table.get(table.rows[0], "CCS_A2")) - round(direct.omega_a2, 2)) < 0.006
+        and table.get(table.rows[0], "gas") == "helium"
+        and table.get(table.rows[0], "excluded") == "S_007.raw;S_008.raw"
+        and written["species"][0]["cross_section"]["pressure_Torr"] == 2.03,
+    )
+
+    sheet = runsheet.RunSheet.from_template(template, os.path.join(work, "sheet"), base_name="S")
+    sheet.watch = {"polls": 4, "files": ["_extern.inf"]}
+    sheet.species = [species.to_table()]
+    sheet.save()
+    again = runsheet.RunSheet.open(sheet.set_dir)
+    check_true(
+        "the run sheet keeps the [watch] rule and the species across a reopen",
+        live.WatchRule.from_table(again.watch).polls == 4
+        and [live.Species.from_table(e) for e in again.species] == [species],
+    )
+
+    smoke = os.environ.get("SCHAMP_SMOKE_RAW")
+    problem = live.sdk_problem()
+    if problem or not smoke:
+        why = "no SDK or license" if problem else "set SCHAMP_SMOKE_RAW to an acquisition"
+        skip("the watcher finishes a real acquisition under the default rule", why)
+        skip("one real acquisition read and fitted through the live path", why)
+    else:
+        real = live.Watcher(live.WatchRule(polls=2, interval_s=1.0))
+        parent = os.path.dirname(os.path.abspath(smoke))
+        real.update(live.list_raws(parent))
+        events = real.update(live.list_raws(parent))
+        check_true(
+            "the watcher finishes a real acquisition under the default rule",
+            os.path.basename(os.path.abspath(smoke)) in [e.acquisition for e in events if e.kind == "finished"],
+        )
+        spectrum = live.spectrum_of(smoke)
+        tallest = float(spectrum.mz[int(np.argmax(spectrum.intensity))])
+        result = live.analyse_acquisition(smoke, [live.Species("tallest", tallest, 1)])
+        check_true("one real acquisition read and fitted through the live path", result.species["tallest"].ok)
+finally:
+    shutil.rmtree(work, ignore_errors=True)
 
 # --------------------------------------------------------------------------------
 section("the drift-time regression")
