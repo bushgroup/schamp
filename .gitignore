@@ -22,3 +22,8 @@ schamp.ini
 *.raw/
 # Generated example output.
 examples/out/
+# tools/build_exe.py: the frozen folder, the zip and the installer; PyInstaller's work,
+# its generated spec, and the downloaded Visual C++ redistributable.
+dist/
+build/
+*.spec

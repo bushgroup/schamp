@@ -134,6 +134,11 @@ class LivePane(QtWidgets.QWidget):
         self.setEnabled(sheet is not None)
         self.look()
 
+    def sdk_changed(self) -> None:
+        """The SDK was just installed (the wizard): ask again whether reads can start."""
+        self.sdk_problem = live.sdk_problem()
+        self.drain()
+
     def data_dir_changed(self) -> None:
         """The operator pointed the sheet somewhere else: start watching from scratch."""
         self.set_sheet(self.sheet)

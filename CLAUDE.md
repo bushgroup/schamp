@@ -19,8 +19,8 @@ you are reading this file *without* that import, you have a public clone — the
 - **`uv run tools/check_public.py`** after touching `src/schamp/` or `examples/`. Data- and SDK-free:
   a clone with no Waters SDK, no license and no `.raw` must pass it; checks that need the SDK report
   SKIPPED, never FAIL, without it. `SCHAMP_SMOKE_RAW` names an acquisition for the reads needing one.
-- **The module layout is settled** (lab record, task 03): only `extract` and `sdk` may touch the SDK,
-  `atd.ATD` is the seam, and everything else keeps running without one. The GUI in `acquire/` imports
+- **The module layout is settled** (lab record, task 03): only `extract`, `sdk` and `sdk_install`
+  may touch the SDK, `atd.ATD` is the seam, and everything else runs without one. The GUI in `acquire/` imports
   PySide6 (the optional extra `schamp[acquire]`) only in its widget modules; `acquire/model.py` runs
   without Qt and the self-check SKIPs without it. Hardware constants belong in an instrument profile
   TOML, per-acquisition conditions in a conditions table — never in analysis code. New physics goes

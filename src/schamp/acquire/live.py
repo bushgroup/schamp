@@ -51,6 +51,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .. import FROZEN
 from ..atd import ATD, FitResult, fit_gaussian
 from ..calibration import CalibrationProvenance, MzFrame
 from ..experiment import Conditions, Experiment
@@ -75,6 +76,9 @@ __all__ = [
     "sdk_problem",
     "spectrum_of",
 ]
+
+SDK_MENU_TEXT = "Install the Waters SDK…"
+"""The Tools menu entry that opens the first-launch wizard, named where the SDK is missing."""
 
 OUTLIER_FACTOR = 3.0
 """A point is flagged when its residual from the line is more than this many times the
@@ -438,18 +442,23 @@ class AcquisitionResult:
 
 def sdk_problem() -> str:
     """Why the SDK cannot be used here, or "" if it can. Imports nothing native."""
+    importlib.invalidate_caches()
+    how = (
+        f"Tools > {SDK_MENU_TEXT}" if FROZEN
+        else "uv run tools/install_sdk.py <the download's zip>"
+    )
     if importlib.util.find_spec("masslynxsdk") is None:
         return (
-            "The Waters MassLynx SDK is not installed, so nothing can be read from the "
-            "acquisitions. Install it from your own Waters download: "
-            "uv run tools/install_sdk.py <the download's zip>. The run sheet keeps working."
+            "Waiting for the Waters MassLynx SDK: nothing can be read from the acquisitions "
+            f"until it is installed from your own Waters download ({how}). The run sheet "
+            "keeps working."
         )
     from .. import sdk  # noqa: PLC0415
 
     try:
         sdk.resolve_license()
     except sdk.ConfigError as exc:
-        return f"No Waters SDK license key: {exc} The run sheet keeps working."
+        return f"No Waters SDK license key: {exc} ({how}). The run sheet keeps working."
     return ""
 
 

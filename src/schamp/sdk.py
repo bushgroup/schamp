@@ -8,7 +8,8 @@ not wrap them (lab record, task 02).
 
 `masslynxsdk` is imported inside the functions that need it, so this module imports on a
 machine that has no SDK and every non-extraction code path keeps working. Install the SDK
-with `uv run tools/install_sdk.py <your Waters download>`.
+with `uv run tools/install_sdk.py <your Waters download>`, or in the installed
+application with its first-launch wizard; both go through `sdk_install`.
 
 The license key resolves in this order, first hit winning:
 
@@ -19,10 +20,13 @@ The license key resolves in this order, first hit winning:
 5. `[license] key` then `[license] path` in `schamp.ini`, looked for at `config_path=`,
    then `$SCHAMP_CONFIG`, then `./schamp.ini`, then `~/.schamp.ini`
 6. `./license.key`
-7. `external/masslynxsdk/license.key`, where `tools/install_sdk.py` puts it
+7. `license.key` in `schamp.SDK_DIR`, where the install puts the download's own key:
+   `external/masslynxsdk/` in a checkout, `%LOCALAPPDATA%/schamp/masslynxsdk/` for the
+   installed application -- never inside the application's own folder
 
 1-6 are waters2python's convention with schamp's names (lab record, task 02); 7 is added
-so that an install through `install_sdk.py` needs no configuration at all. The key is a
+so that an install from the download needs no configuration at all. A key Waters sent
+separately is written into `~/.schamp.ini` as `[license] path` (level 5) by the install. The key is a
 credential: it is never logged, never put in an exception message, and never written out.
 """
 
@@ -32,15 +36,15 @@ import configparser
 import os
 from dataclasses import dataclass, field
 
-from . import EXTERNAL_DIR
+from . import SDK_DIR
 
-__all__ = ["ConfigError", "Readers", "open_readers", "resolve_license"]
+__all__ = ["ConfigError", "Readers", "license_source", "open_readers", "resolve_license"]
 
 ENV_KEY = "SCHAMP_LICENSE_KEY"
 ENV_PATH = "SCHAMP_LICENSE_PATH"
 ENV_CONFIG = "SCHAMP_CONFIG"
 CONFIG_NAME = "schamp.ini"
-INSTALLED_KEY = os.path.join(EXTERNAL_DIR, "masslynxsdk", "license.key")
+INSTALLED_KEY = os.path.join(SDK_DIR, "license.key")
 
 
 class ConfigError(Exception):
@@ -98,6 +102,35 @@ def _from_config(config_path: str | None) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _resolve(
+    license_key: str | None, license_path: str | None, config_path: str | None
+) -> tuple[str, str]:
+    """`(key, where it came from)` by the module's precedence. The source never holds the key."""
+    if license_key:
+        return license_key.strip(), "the license_key argument"
+    if license_path:
+        return _read_key_file(license_path), f"the license_path argument ({license_path})"
+    env_key = os.environ.get(ENV_KEY, "").strip()
+    if env_key:
+        return env_key, f"${ENV_KEY}"
+    env_path = os.environ.get(ENV_PATH, "").strip()
+    if env_path:
+        return _read_key_file(env_path), f"${ENV_PATH} ({env_path})"
+    from_config, source = _from_config(config_path)
+    if from_config:
+        return from_config, source
+    for path in (os.path.join(os.getcwd(), "license.key"), INSTALLED_KEY):
+        if os.path.isfile(path):
+            return _read_key_file(path), path
+    raise ConfigError(
+        "no Waters SDK license key. Looked at: the license_key and license_path "
+        f"arguments, ${ENV_KEY}, ${ENV_PATH}, {CONFIG_NAME} "
+        f"({', '.join(_config_candidates(config_path))}), ./license.key, and "
+        f"{INSTALLED_KEY}. The key ships with your Waters SDK download, and installing "
+        "the SDK from it puts the key in the last of those."
+    )
+
+
 def resolve_license(
     *,
     license_key: str | None = None,
@@ -108,29 +141,15 @@ def resolve_license(
 
     Raises `ConfigError`, naming every place it looked, when nothing resolves.
     """
-    if license_key:
-        return license_key.strip()
-    if license_path:
-        return _read_key_file(license_path)
-    env_key = os.environ.get(ENV_KEY, "").strip()
-    if env_key:
-        return env_key
-    env_path = os.environ.get(ENV_PATH, "").strip()
-    if env_path:
-        return _read_key_file(env_path)
-    from_config, _ = _from_config(config_path)
-    if from_config:
-        return from_config
-    for path in (os.path.join(os.getcwd(), "license.key"), INSTALLED_KEY):
-        if os.path.isfile(path):
-            return _read_key_file(path)
-    raise ConfigError(
-        "no Waters SDK license key. Looked at: the license_key and license_path "
-        f"arguments, ${ENV_KEY}, ${ENV_PATH}, {CONFIG_NAME} "
-        f"({', '.join(_config_candidates(config_path))}), ./license.key, and "
-        f"{INSTALLED_KEY}. The key ships with your Waters SDK download; "
-        "`uv run tools/install_sdk.py <download>` puts it in the last of those."
-    )
+    return _resolve(license_key, license_path, config_path)[0]
+
+
+def license_source(*, config_path: str | None = None) -> str:
+    """Where `resolve_license()` would find the key: a description, never the key itself.
+
+    Raises `ConfigError` as `resolve_license` does.
+    """
+    return _resolve(None, None, config_path)[1]
 
 
 @dataclass

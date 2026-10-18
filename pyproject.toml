@@ -49,4 +49,8 @@ dev = [
     # The same pin as the `acquire` extra, so that `uv run schamp-acquire` works in a
     # development checkout with no flag. Elsewhere: `uv run --extra acquire schamp-acquire`.
     "PySide6-Essentials~=6.12.0",
+    # Freezing schamp-acquire for the installer and the portable zip, tools/build_exe.py
+    # (lab record, task 16). A build tool only: nothing imports it at run time, and the
+    # bootloader it puts in a build is under its GPL's bootloader exception.
+    "pyinstaller~=6.22.3",
 ]

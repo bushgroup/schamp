@@ -4,6 +4,8 @@
     schamp-acquire SET_DIR              open the set there, or start one from the
                                         standard template if the folder holds none
     schamp-acquire SET_DIR --template T start a new set from template T (name or path)
+    schamp-acquire --install-sdk ZIP    install the Waters SDK from the lab's own download
+    schamp-acquire --self-check REPORT  write what this copy can do here (window, SDK), as JSON
 
 The window is a view over `model.RunSheet`. Every edit is saved at once: the record
 on disk is always what the window shows, and closing the window loses nothing. Calls
@@ -16,15 +18,19 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib.util
+import json
 import os
+import shutil
 import sys
+import tempfile
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .. import __version__
+from .. import BUILD, FROZEN, SDK_DIR, __version__, sdk, sdk_install
 from ..constants import GASES
 from ..importer import import_set
-from . import model
+from . import live, model
 from .livepane import LivePane
 from .widgets import Background, PlanCanvas, RunSheetTable
 
@@ -180,6 +186,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.import_action = file.addAction("&Import acquisitions…", self.import_acquisitions)
         file.addSeparator()
         file.addAction("&Quit", QtGui.QKeySequence.Quit, self.close)
+        tools = bar.addMenu("&Tools")
+        tools.addAction(live.SDK_MENU_TEXT, self.install_sdk)
         rows = bar.addMenu("&Rows")
         self.row_actions = [
             rows.addAction("Apply a &template…", self.apply_template),
@@ -473,6 +481,28 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Import", report.describe())
         self.save()
 
+    def install_sdk(self) -> None:
+        """The first-launch wizard (`sdkwizard`), also reachable from the Tools menu."""
+        from .sdkwizard import SdkWizard  # noqa: PLC0415 -- rarely opened
+
+        if SdkWizard(self).exec() == QtWidgets.QDialog.Accepted:
+            self.live.sdk_changed()
+
+    def offer_sdk_install(self) -> None:
+        """At the installed application's start, while it has no SDK: ask once a launch."""
+        if importlib.util.find_spec("masslynxsdk") is not None:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self, "schamp-acquire",
+            "The Live tab reads acquisitions through the Waters MassLynx SDK, which each lab "
+            "installs once from its own Waters download. Install it now?\n\n"
+            f"The run sheet works without it, and Tools > {live.SDK_MENU_TEXT} is there "
+            "whenever you are ready.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if answer == QtWidgets.QMessageBox.Yes:
+            self.install_sdk()
+
     # -- rows ----------------------------------------------------------------------
 
     def current_row(self) -> int:
@@ -540,6 +570,83 @@ class MainWindow(QtWidgets.QMainWindow):
         self.on_edit()
 
 
+def _gui_check() -> dict:
+    """Build the window, unshown, on a run sheet from the standard template, and draw it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
+    work = tempfile.mkdtemp(prefix="schamp-self-check-")
+    try:
+        window = MainWindow()
+        window.set_sheet(model.RunSheet.from_template(model.DEFAULT_TEMPLATE, work, base_name="S"))
+        app.processEvents()
+        window.canvas.draw()
+        rows = window.table.rowCount()
+        window.timer.stop()
+        window.set_sheet(None)
+        window.deleteLater()
+        app.processEvents()
+        return {"ok": rows > 0, "rows": rows, "template": model.DEFAULT_TEMPLATE, "qt": QtCore.qVersion()}
+    except Exception as exc:  # noqa: BLE001 -- reported, which is the point
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def self_check() -> dict:
+    """What this copy of schamp can do here, as JSON-ready data.
+
+    For `--self-check`: the installed application has no console, so this is how a lab (or
+    the build's own verification) asks it whether its window builds and draws, whether the
+    Waters SDK imports, which key it would use -- by where it is, never what it is -- and,
+    with `$SCHAMP_SMOKE_RAW` naming an acquisition, whether a total spectrum and one fitted
+    ATD come out of it.
+    """
+    out: dict = {
+        "schamp": __version__,
+        "frozen": FROZEN,
+        "build": BUILD,
+        "python": sys.version.split()[0],
+        "sdk_dir": SDK_DIR,
+        "gui": _gui_check(),
+        "installed": None,
+        "raw": None,
+    }
+    manifest = sdk_install.read_manifest()
+    if manifest:
+        out["installed"] = {k: manifest.get(k) for k in ("version", "wheel", "download", "installed_utc")}
+    try:
+        version, dll = sdk_install.probe()
+        out["import"] = {"ok": True, "version": version, "dll": dll}
+    except sdk_install.InstallError as exc:
+        out["import"] = {"ok": False, "error": str(exc)}
+    try:
+        out["license"] = {"ok": True, "source": sdk.license_source()}
+    except sdk.ConfigError as exc:
+        out["license"] = {"ok": False, "error": str(exc)}
+    raw = os.environ.get("SCHAMP_SMOKE_RAW")
+    if raw and out["import"]["ok"] and out["license"]["ok"]:
+        import numpy as np  # noqa: PLC0415
+
+        try:
+            spectrum = live.spectrum_of(raw)
+            tallest = float(spectrum.mz[int(np.argmax(spectrum.intensity))])
+            found = live.analyse_acquisition(raw, [live.Species("tallest", tallest, 1)]).species["tallest"]
+            out["raw"] = {
+                "path": raw,
+                "mz_range": [float(v) for v in spectrum.mz_range],
+                "tallest_mz": tallest,
+                "atd_fitted": found.ok,
+                "centre_ms": found.fit.centre_ms if found.fit else None,
+            }
+        except Exception as exc:  # noqa: BLE001 -- reported, which is the point
+            out["raw"] = {"path": raw, "error": f"{type(exc).__name__}: {exc}"}
+    out["sdk_ok"] = bool(
+        out["import"]["ok"] and out["license"]["ok"]
+        and (out["raw"] is None or out["raw"].get("atd_fitted"))
+    )
+    out["ok"] = out["gui"]["ok"] and out["sdk_ok"]
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="schamp-acquire",
@@ -548,8 +655,48 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("set_dir", nargs="?", help="the set to open, or to start")
     parser.add_argument("--template", help=f"series template for a new set (default {model.DEFAULT_TEMPLATE})")
+    parser.add_argument(
+        "--install-sdk", metavar="ZIP",
+        help="install the Waters SDK from your own Waters download without opening the window "
+        "(what Tools > Install the Waters SDK does)",
+    )
+    parser.add_argument(
+        "--license-file", metavar="KEY",
+        help="with --install-sdk: a license.key Waters sent apart from the download",
+    )
+    parser.add_argument(
+        "--self-check", metavar="REPORT",
+        help="build the window unshown, look for the SDK and its key, write what was found as "
+        "JSON to REPORT (- for standard output) and exit; $SCHAMP_SMOKE_RAW adds a read of "
+        "that acquisition",
+    )
     parser.add_argument("--version", action="version", version=f"schamp {__version__}")
     args = parser.parse_args(argv)
+
+    if args.license_file and not args.install_sdk:
+        parser.error("--license-file goes with --install-sdk")
+    if args.install_sdk or args.self_check:
+        status = 0
+        if args.install_sdk:
+            try:
+                sdk_install.install(
+                    args.install_sdk, license_file=args.license_file,
+                    link_environment=not FROZEN, log=print,
+                )
+            except (sdk_install.InstallError, OSError) as exc:
+                # The installed application has no console: print() to a missing stdout is
+                # a no-op, and the exit status and --self-check carry the outcome instead.
+                print(f"Install failed. {exc}")
+                status = 1
+        if args.self_check:
+            report = json.dumps(self_check(), indent=2) + "\n"
+            if args.self_check == "-":
+                print(report, end="")
+            else:
+                with open(args.self_check, "w", encoding="utf-8") as fh:
+                    fh.write(report)
+            status = status or (0 if json.loads(report)["ok"] else 1)
+        return status
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
     app.setApplicationName("schamp-acquire")
@@ -571,6 +718,8 @@ def main(argv: list[str] | None = None) -> int:
         except model.RunSheetError as exc:
             parser.error(str(exc))
     window.show()
+    if FROZEN:
+        QtCore.QTimer.singleShot(0, window.offer_sdk_install)
     return app.exec()
 
 

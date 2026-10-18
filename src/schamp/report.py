@@ -30,7 +30,7 @@ import os
 import subprocess
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import ROOT, __version__, lab_dir
+from . import BUILD, ROOT, __version__, lab_dir
 
 __all__ = [
     "commit_of",
@@ -71,7 +71,8 @@ def stamp(results: Any, *, task: str = "") -> dict[str, Any]:
         "task": task,
         "date": _dt.date.today().isoformat(),
         "schamp_version": __version__,
-        "schamp_commit": commit_of(ROOT),
+        # The installed application is no checkout: its commit is the one it was built from.
+        "schamp_commit": BUILD.get("commit") if BUILD else commit_of(ROOT),
         "lab_commit": commit_of(lab) if lab else None,
         "results": results,
     }
